@@ -105,15 +105,14 @@ class SoloLatinoProvider : MainAPI() {
                         val episodeNum = numbers?.getOrNull(1) ?: (episodes.count { it.season == seasonNum } + 1)
                         val episodePoster = fixUrlNull(episodeElement.selectFirst("div.imagen img")?.attr("src"))
                         
-                        episodes.add(
-                            Episode(
-                                data = episodeUrl,
-                                name = episodeTitle,
-                                season = seasonNum,
-                                episode = episodeNum,
-                                posterUrl = episodePoster
-                            )
-                        )
+                        // Usando newEpisode correctamente
+                        val episode = newEpisode(episodeUrl) {
+                            this.name = episodeTitle
+                            this.season = seasonNum
+                            this.episode = episodeNum
+                            this.posterUrl = episodePoster
+                        }
+                        episodes.add(episode)
                     }
                 }
             }
