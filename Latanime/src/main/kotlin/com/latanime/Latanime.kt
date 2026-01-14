@@ -14,6 +14,7 @@ import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.addEpisodes
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
+import com.lagradost.cloudstream3.fixUrl
 import com.lagradost.cloudstream3.fixUrlNull
 import com.lagradost.cloudstream3.mainPageOf
 import com.lagradost.cloudstream3.newAnimeLoadResponse
@@ -26,44 +27,31 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
 
 class Latanime : MainAPI() {
-    override var mainUrl = "https://latanime.org"
-    override var name = "Latanime"
-    override val hasMainPage = true
-    override var lang = "es-mx"
-    override val hasDownloadSupport = true
-    override val hasQuickSearch = true
-    override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie)
+    override var mainUrl              = "https://latanime.org"
+    override var name                 = "Latanime"
+    override val hasMainPage          = true
+    override var lang                 = "es-mx"
+    override val hasDownloadSupport   = true
+    override val hasQuickSearch       = true
+    override val supportedTypes       = setOf(TvType.Anime, TvType.AnimeMovie)
 
     override val mainPage = mainPageOf(
+        "animes?fecha=false&genero=false&letra=false&categoria=latino" to "Anime Latino",
         "animes?fecha=false&genero=false&letra=false&categoria=anime" to "Anime",
-        "animes?fecha=false&genero=false&letra=false&categoria=Película" to "Película",
-        "animes?fecha=false&genero=false&letra=false&categoria=especial" to "Especial",
-        "animes?fecha=false&genero=false&letra=false&categoria=donghua" to "Donghua",
+        "animes?fecha=false&genero=false&letra=false&categoria=Película%20Latino" to "Película Latino",
+        "animes?fecha=false&genero=false&letra=false&categoria=Película" to "Película Subtitulado",
+        "animes?fecha=false&genero=false&letra=false&categoria=ova-latino" to "OVA Latino",
+        "animes?fecha=false&genero=false&letra=false&categoria=ova" to "OVA",
+        "animes?fecha=false&genero=false&letra=false&categoria=especial" to "Especial"
     )
-
-    // ---- NUEVO: función para priorizar idioma ----
-    private fun List<SearchResponse>.prioritizeLang(): List<SearchResponse> {
-        return this.sortedBy {
-            val t = it.name.lowercase()
-            when {
-                t.contains("latino") -> 0
-                t.contains("sub") || t.contains("subtitulado") -> 1
-                t.contains("castellano") -> 2
-                else -> 3
-            }
-        }
-    }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get("$mainUrl/${request.data}&p=$page").documentLarge
-        val home = document.select("div.row a")
-            .mapNotNull { it.toSearchResult() }
-            .prioritizeLang()
-
+        val home     = document.select("div.row a").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(
-            list = HomePageList(
-                name = request.name,
-                list = home,
+            list    = HomePageList(
+                name               = request.name,
+                list               = home,
                 isHorizontalImages = false
             ),
             hasNext = true
@@ -71,10 +59,10 @@ class Latanime : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse {
-        val title = this.select("h3").text()
-        val href = this.attr("href")
+        val title     = this.select("h3").text()
+        val href      = this.attr("href")
         val posterUrl = fixUrlNull(this.selectFirst("img")?.getImageAttr())
-        val isDub = title.contains("Latino") || title.contains("Castellano")
+        val isDub     = title.contains("Latino") || title.contains("Castellano")
         return newAnimeSearchResponse(title, href, TvType.Anime) {
             this.posterUrl = posterUrl
             addDubStatus(isDub)
@@ -83,24 +71,22 @@ class Latanime : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("${mainUrl}/buscar?q=$query").documentLarge
-        return document.select("div.row a")
-            .mapNotNull { it.toSearchResult() }
-            .prioritizeLang()
+        return document.select("div.row a").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).documentLarge
-        val title = document.selectFirst("h2")?.text() ?: "Desconocido"
-        val poster = document.selectFirst("meta[property=og:image]")?.attr("content")?.trim()
+        val document    = app.get(url).documentLarge
+        val title       = document.selectFirst("h2")?.text() ?: "Desconocido"
+        val poster      = document.selectFirst("meta[property=og:image]")?.attr("content")?.trim()
         val description = document.selectFirst("h2 ~ p.my-2")?.text()
-        val tags = document.select("a div.btn").map { it.text() }
-        val year = document.select(".span-tiempo").text().substringAfterLast(" de ").toIntOrNull()
-        val epsAnchor = document.select("div.row a[href*='/ver/']")
+        val tags        = document.select("a div.btn").map { it.text() }
+        val year        = document.select(".span-tiempo").text().substringAfterLast(" de ").toIntOrNull()
+        val epsAnchor   = document.select("div.row a[href*='/ver/']")
 
         return if (epsAnchor.size > 1) {
             val episodes: List<Episode>? = epsAnchor.map {
                 val epPoster = it.select("img").attr("data-src")
-                val epHref = it.attr("href")
+                val epHref   = it.attr("href")
 
                 newEpisode(epHref) {
                     this.posterUrl = epPoster
@@ -121,6 +107,7 @@ class Latanime : MainAPI() {
             this.year = year
         }
     }
+
 
     override suspend fun loadLinks(
         data: String,
