@@ -1,12 +1,12 @@
-package com.sololatino
+package com.pelisgratishd
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 import android.content.Context
 
 @CloudstreamPlugin
-class SoloLatinoProviderPlugin: Plugin() {
+class pelisgratishdProvider: Plugin() {
     override fun load(context: Context) {
-        registerMainAPI(SoloLatinoProvider())
+        registerMainAPI(pelisgratishd())
     }
 }

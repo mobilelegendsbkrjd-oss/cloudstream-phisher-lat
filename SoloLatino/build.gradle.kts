@@ -1,28 +1,15 @@
 // use an integer for version numbers
-version = 1
+version = 5
 
 cloudstream {
-    language = "es"
+    description = "(Mexican) Solo Latino - Películas y Series en Español Latino"
+    language    = "mx"
+    authors = listOf("bkrjd")
     
-    authors = listOf("misajimenezmx")
-    
-    /**
-     * Status int as the following:
-     * 0: Down
-     * 1: Ok
-     * 2: Slow
-     * 3: Beta only
-     * */
     status = 1
-    tvTypes = listOf(
-        "Movie",
-        "TvSeries", 
-        "Anime",
-        "Cartoon",
-    )
-
-    iconUrl = "https://sololatino.net/wp-content/uploads/2020/10/cropped-logo-final-192x192.png"
     
-    // Opcional: Puedes agregar una descripción
-    // description = "Ver películas, series y animes en español latino"
+    tvTypes = listOf("Movie", "TvSeries", "Anime", "Cartoon")
+    iconUrl = "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/Icons/sololatino.png"
+    
+    isCrossPlatform = false
 }
