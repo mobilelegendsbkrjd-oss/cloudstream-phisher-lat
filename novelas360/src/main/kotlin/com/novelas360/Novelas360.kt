@@ -5,93 +5,160 @@ import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 
 class Novelas360 : MainAPI() {
+
     override var mainUrl = "https://novelas360.com"
     override var name = "Novelas360"
     override val hasMainPage = true
     override var lang = "es"
     override val supportedTypes = setOf(TvType.TvSeries)
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Usamos la URL que me pasaste donde se ven las novelas de México
-        val url = if (page <= 1) "$mainUrl/telenovelas/mexico/" else "$mainUrl/telenovelas/mexico/page/$page/"
-        val document = app.get(url).document
-        
-        // En tu HTML, cada novela está dentro de un <article>
-        val items = document.select("article").mapNotNull {
-            it.toSearchResult()
-        }
-        
+    // ==============================
+    // Helper para evitar HTML vacío
+    // ==============================
+    private suspend fun getDoc(url: String) =
+        app.get(
+            url,
+            headers = mapOf(
+                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+                "Referer" to mainUrl
+            )
+        ).document
+
+    // ==============================
+    // MAIN PAGE (Novelas México)
+    // ==============================
+    override suspend fun getMainPage(
+        page: Int,
+        request: MainPageRequest
+    ): HomePageResponse {
+
+        val url = "$mainUrl/telenovelas/mexico/"
+        val document = getDoc(url)
+
+        val items = document
+            .select("div.tabcontent#Todos > a")
+            .mapNotNull { it.toSearchResultFromCategory() }
+
         return newHomePageResponse(
             listOf(HomePageList("Telenovelas México", items)),
-            true
+            false
         )
     }
 
-    private fun Element.toSearchResult(): SearchResponse? {
-        // Selector basado EXACTAMENTE en tu HTML de 'Mexico':
-        // El link y título están en: <div class="post-header"><h2><a href="...">Título</a></h2></div>
-        val titleElement = this.selectFirst(".post-header h2 a, h2 a, h3 a")
-        val title = titleElement?.text() ?: return null
-        val href = titleElement?.attr("href") ?: return null
-        
-        // Imagen: El sitio usa data-src para el Lazy Load. Si no lo ponemos, sale el cuadro vacío o gris.
-        val img = this.selectFirst("img")
-        val posterUrl = img?.attr("data-src")?.ifEmpty { img.attr("src") } ?: img?.attr("src")
-
-        return newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
-            this.posterUrl = posterUrl
-        }
-    }
-
+    // ==============================
+    // SEARCH
+    // ==============================
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/?s=$query"
-        val document = app.get(url).document
-        // En búsqueda, WordPress usa la misma estructura de <article>
-        return document.select("article").mapNotNull { it.toSearchResult() }
-    }
+        val document = getDoc(url)
 
-    override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
-        
-        // En la página del video, el título es un h1 con clase entry-title
-        val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: ""
-
-        // Como el sitio no tiene lista de capítulos (cada post es un capítulo), creamos uno solo
-        val episodes = listOf(
-            newEpisode(url) {
-                name = "Reproducir Video"
-            }
-        )
-
-        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-            this.posterUrl = document.selectFirst("meta[property='og:image']")?.attr("content")
-            this.plot = document.selectFirst(".entry-content p")?.text()
+        return document.select("article").mapNotNull {
+            it.toSearchResultFromPost()
         }
     }
 
+    // ==============================
+    // LOAD NOVELA (Categoría)
+    // ==============================
+    override suspend fun load(url: String): LoadResponse {
+        val document = getDoc(url)
+
+        val title = document.selectFirst("h1, h2.entry-title")
+            ?.text()
+            ?.trim()
+            ?: "Novela"
+
+        val episodes = document
+            .select("article")
+            .mapIndexed { index, article ->
+                val epUrl = article.selectFirst("a")?.attr("href") ?: url
+                val epTitle = article.selectFirst("h2, h3")?.text()
+
+                newEpisode(epUrl) {
+                    name = epTitle ?: "Capítulo ${index + 1}"
+                    episode = index + 1
+                }
+            }
+
+        return newTvSeriesLoadResponse(
+            title,
+            url,
+            TvType.TvSeries,
+            episodes
+        ) {
+            posterUrl =
+                document.selectFirst("meta[property=og:image]")?.attr("content")
+        }
+    }
+
+    // ==============================
+    // LOAD LINKS (Reproductores)
+    // ==============================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data).document
-        
-        // Buscamos todos los iframes. 
-        // Tu primer HTML mostró que usan Dailymotion dentro de un iframe.
+
+        val document = getDoc(data)
+
         document.select("iframe").forEach { iframe ->
             var src = iframe.attr("src")
-            
+
             if (src.isNotEmpty()) {
-                // Arreglar links tipo //www.dailymotion.com/...
                 if (src.startsWith("//")) src = "https:$src"
-                
-                // Evitamos cargar basura de redes sociales
-                if (src.contains("dailymotion.com") || src.contains("ok.ru") || src.contains("netu") || src.contains("embed")) {
+
+                if (
+                    src.contains("dailymotion") ||
+                    src.contains("ok.ru") ||
+                    src.contains("netu") ||
+                    src.contains("embed")
+                ) {
                     loadExtractor(src, data, subtitleCallback, callback)
                 }
             }
         }
         return true
+    }
+
+    // ==============================
+    // PARSER PARA MAIN PAGE (Categorías)
+    // ==============================
+    private fun Element.toSearchResultFromCategory(): SearchResponse? {
+        val href = attr("href")
+        if (href.isEmpty()) return null
+
+        val title = selectFirst("span.tabcontentnom")
+            ?.ownText()
+            ?.trim()
+            ?: return null
+
+        val img = selectFirst("img")
+        val posterUrl = img?.attr("data-src")?.ifEmpty {
+            img.attr("src")
+        }
+
+        return newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+            this.posterUrl = posterUrl
+        }
+    }
+
+    // ==============================
+    // PARSER PARA SEARCH (Posts)
+    // ==============================
+    private fun Element.toSearchResultFromPost(): SearchResponse? {
+        val titleElement = selectFirst("h2 a, h3 a") ?: return null
+        val title = titleElement.text()
+        val href = titleElement.attr("href")
+
+        val img = selectFirst("img")
+        val posterUrl = img?.attr("data-src")?.ifEmpty {
+            img.attr("src")
+        }
+
+        return newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+            this.posterUrl = posterUrl
+        }
     }
 }
