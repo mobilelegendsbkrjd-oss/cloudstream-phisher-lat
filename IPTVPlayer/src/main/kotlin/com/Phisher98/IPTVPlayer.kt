@@ -55,7 +55,6 @@ class IPTVPlayer : MainAPI() {
                 this.episode = index + 1
                 this.season = 1
                 this.posterUrl = ch.attributes["tvg-logo"] ?: ""
-                // Guardamos los datos necesarios en el string data
                 this.data = LoadData(
                     url = ch.url!!,
                     title = ch.title!!,
@@ -65,7 +64,6 @@ class IPTVPlayer : MainAPI() {
             }
         }
 
-        // Usamos la respuesta estándar de series pero marcada como Live
         return newTvSeriesLoadResponse(list.first, list.first, TvType.Live, episodes) {
             this.posterUrl = list.third
             this.plot = "Canales en vivo: ${list.first}"
@@ -86,41 +84,27 @@ class IPTVPlayer : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val ld = parseJson<LoadData>(data)
+        
+        // Usamos el constructor más básico de ExtractorLink para evitar el error de "prerelease"
+        val isM3u8 = ld.url.contains(".m3u") || ld.url.contains(".m3u8") || !ld.url.contains(".mpd")
 
-        if (ld.url.contains(".mpd") || ld.key.isNotBlank()) {
-            // DRM para versión estable (sin parámetros experimentales)
-            callback.invoke(
-                ExtractorLink(
-                    source = this.name,
-                    name = ld.title,
-                    url = ld.url,
-                    referer = "",
-                    quality = Qualities.Unknown.value,
-                    type = ExtractorLinkType.DASH,
-                    headers = mapOf(
-                        "key" to ld.key.trim(),
-                        "kid" to ld.kid.trim()
-                    )
-                )
+        callback.invoke(
+            ExtractorLink(
+                this.name,
+                ld.title,
+                ld.url,
+                "",
+                Qualities.Unknown.value,
+                isM3u8, // Aquí pasamos si es m3u8 directamente
+                emptyMap(),
+                null
             )
-        } else {
-            // M3U8 para versión estable
-            callback.invoke(
-                ExtractorLink(
-                    source = this.name,
-                    name = ld.title,
-                    url = ld.url,
-                    referer = "",
-                    quality = Qualities.Unknown.value,
-                    type = ExtractorLinkType.M3U8
-                )
-            )
-        }
+        )
         return true
     }
 }
 
-/* ============== PARSER MANTENIDO ============== */
+/* ============== PARSER ============== */
 
 data class Playlist(val items: List<PlaylistItem> = emptyList())
 data class PlaylistItem(
