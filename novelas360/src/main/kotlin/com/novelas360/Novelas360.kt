@@ -8,7 +8,7 @@ class Novelas360 : MainAPI() {
     override var mainUrl = "https://novelas360.com"
     override var name = "Novelas360"
     override val hasMainPage = true
-    override var lang = "es"
+    override var lang = "mx"
     override val supportedTypes = setOf(TvType.TvSeries)
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
