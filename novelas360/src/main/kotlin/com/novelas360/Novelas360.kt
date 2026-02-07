@@ -16,15 +16,14 @@ class Novelas360 : MainAPI() {
     // ==============================
     // HEADERS (anti HTML vacío)
     // ==============================
-    private suspend fun getDoc(url: String): Document {
-        return app.get(
+    private suspend fun getDoc(url: String): Document =
+        app.get(
             url,
             headers = mapOf(
                 "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
                 "Referer" to mainUrl
             )
         ).document
-    }
 
     private fun fixUrl(url: String?): String? {
         if (url.isNullOrBlank()) return null
@@ -64,7 +63,6 @@ class Novelas360 : MainAPI() {
 
             val title = item.selectFirst("h3")?.text() ?: return@mapNotNull null
             val img = item.selectFirst("img")
-
             val posterUrl = fixUrl(
                 img?.attr("data-src")?.ifBlank { img.attr("src") }
             )
@@ -81,28 +79,31 @@ class Novelas360 : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = getDoc(url)
 
-        if (url.contains("/categories/")) {
-            return loadCategoryAsSeries(document, url)
+        return if (url.contains("/categories/")) {
+            loadCategoryAsSeries(document, url)
+        } else {
+            // Fallback si entra directo a un capítulo
+            val title = document.selectFirst("meta[property=og:title]")
+                ?.attr("content")
+                ?.substringBefore("–")
+                ?.trim()
+                ?: "Novela"
+
+            val episode = newEpisode(url) {
+                name = "Reproducir"
+            }
+
+            newTvSeriesLoadResponse(
+                title,
+                url,
+                TvType.TvSeries,
+                listOf(episode)
+            )
         }
-
-        // Fallback si entra directo a un capítulo
-        val title = document.selectFirst("meta[property=og:title]")
-            ?.attr("content")
-            ?: "Novela"
-
-        val episode = newEpisode(url) {
-            name = "Reproducir"
-        }
-
-        return newTvSeriesLoadResponse(
-            title,
-            url,
-            TvType.TvSeries,
-            listOf(episode)
-        )
     }
 
-    private fun loadCategoryAsSeries(
+    // OJO: debe ser suspend (compatibilidad legacy)
+    private suspend fun loadCategoryAsSeries(
         document: Document,
         url: String
     ): LoadResponse {
