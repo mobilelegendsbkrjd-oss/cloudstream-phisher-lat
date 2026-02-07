@@ -64,41 +64,26 @@ class IPTVPlayer : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val url: String
-        val title: String
-        val mKey: String
-        val mKid: String
+        val ld = if (data.startsWith("{")) parseJson<LoadData>(data) else null
+        val url = ld?.url ?: data
+        val title = ld?.title ?: this.name
 
-        if (data.startsWith("{")) {
-            val ld = parseJson<LoadData>(data)
-            url = ld.url
-            title = ld.title
-            mKey = ld.key
-            mKid = ld.kid
-        } else {
-            url = data
-            title = this.name
-            mKey = ""
-            mKid = ""
-        }
-
-        if (url.contains(".mpd") || mKey.isNotBlank()) {
+        if (url.contains(".mpd") || (ld?.key?.isNotBlank() == true)) {
             callback.invoke(
                 newDrmExtractorLink(
                     source = this.name,
                     name = title,
                     url = url,
-                    type = null, // Aquí el compilador acepta null
-                    keyId = UUID.randomUUID()
+                    type = ExtractorLinkType.DASH,
+                    uuid = UUID.randomUUID() // Corregido según tu log: es 'uuid', no 'keyId'
                 ) {
                     this.quality = Qualities.Unknown.value
-                    this.key = mKey.trim()
-                    this.kid = mKid.trim()
+                    this.key = ld?.key?.trim() ?: ""
+                    this.kid = ld?.kid?.trim() ?: ""
                 }
             )
         } else {
-            // USANDO CONSTRUCTOR DIRECTO CON PARÁMETROS NOMBRADOS
-            // Esto evita el error de 'val cannot be reassigned' y el mismatch de tipo
+            // Usamos el constructor que tu log dice que SÍ existe
             callback.invoke(
                 ExtractorLink(
                     source = this.name,
@@ -106,8 +91,8 @@ class IPTVPlayer : MainAPI() {
                     url = url,
                     referer = "",
                     quality = Qualities.Unknown.value,
-                    type = ExtractorLinkType.M3U8, // Especificamos el tipo correctamente
-                    isM3u8 = true // Se pasa como val en el constructor
+                    type = ExtractorLinkType.M3U8, // Esto reemplaza el isM3u8 y detiene el salto de canales
+                    headers = emptyMap()
                 )
             )
         }
@@ -115,7 +100,7 @@ class IPTVPlayer : MainAPI() {
     }
 }
 
-/* ============== PARSER ============== */
+/* ============== PARSER ORIGINAL ============== */
 
 data class Playlist(val items: List<PlaylistItem> = emptyList())
 data class PlaylistItem(
@@ -158,3 +143,4 @@ class IptvPlaylistParser {
         return Playlist(items)
     }
 }
+
