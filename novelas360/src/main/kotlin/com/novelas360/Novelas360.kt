@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 
 class Novelas360 : MainAPI() {
+    // Usaremos la sección de México como principal ya que tiene el listado limpio
     override var mainUrl = "https://novelas360.com"
     override var name = "Novelas360"
     override val hasMainPage = true
@@ -12,29 +13,30 @@ class Novelas360 : MainAPI() {
     override val supportedTypes = setOf(TvType.TvSeries)
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Manejo de paginación: la página 1 es la base, las demás /page/n/
-        val url = if (page <= 1) mainUrl else "$mainUrl/page/$page/"
+        // Si la principal falla, apuntamos directamente a la categoría donde están las novelas
+        val url = if (page <= 1) "$mainUrl/telenovelas/mexico/" else "$mainUrl/telenovelas/mexico/page/$page/"
         val document = app.get(url).document
         
-        // Selector universal para los artículos en Novelas360
-        val items = document.select("article[class*='post-'], article.item-video").mapNotNull {
+        // En Videotube, los items suelen estar en 'article' o divs con clase 'item-video'
+        val items = document.select("article, .item-video, .video-item").mapNotNull {
             it.toSearchResult()
         }
         
         return newHomePageResponse(
-            listOf(HomePageList("Últimas Actualizaciones", items)),
-            true // Mantenemos true para que permita seguir cargando páginas
+            listOf(HomePageList("Telenovelas", items)),
+            true
         )
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        // Buscamos el título y link. El sitio a veces usa .post-header y otras veces .entry-title
-        val titleElement = this.selectFirst(".post-header h2 a, .entry-title a, h2 a")
+        // Selector preciso basado en tu HTML: el título está en un h3 o h2 dentro de la clase post-header o entry-title
+        val titleElement = this.selectFirst("h2 a, h3 a, .post-header h2 a, .entry-title a")
         val title = titleElement?.text() ?: return null
         val href = titleElement?.attr("href") ?: return null
         
-        // Imagen: Priorizamos el atributo src de la imagen dentro del thumbnail
-        val posterUrl = this.selectFirst(".post-thumbnail img, img")?.attr("src")
+        // Imagen: El sitio usa 'post-thumbnail'. Buscamos src o data-src por si hay Lazy Load
+        val img = this.selectFirst(".post-thumbnail img, img")
+        val posterUrl = img?.attr("data-src")?.ifEmpty { img.attr("src") } ?: img?.attr("src")
 
         return newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
             this.posterUrl = posterUrl
@@ -44,22 +46,19 @@ class Novelas360 : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/?s=$query"
         val document = app.get(url).document
-        
-        return document.select("article[class*='post-']").mapNotNull {
-            it.toSearchResult()
-        }
+        return document.select("article, .item-video").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
         
-        // Título de la novela o capítulo
-        val title = document.selectFirst("h1.entry-title, .post-header h1")?.text()?.trim() ?: "Sin Título"
+        // Título principal de la página
+        val title = document.selectFirst("h1.entry-title, .post-header h1")?.text()?.trim() ?: ""
 
-        // En este sitio, cada página suele ser un capítulo individual
+        // Creamos un episodio único que apunta a la misma URL (donde está el reproductor)
         val episodes = listOf(
             newEpisode(url) {
-                name = "Ver Capítulo"
+                name = "Ver Capítulo / Novela"
             }
         )
 
@@ -77,16 +76,18 @@ class Novelas360 : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
         
-        // Buscamos todos los iframes (donde se alojan Dailymotion, Netu, etc.)
+        // Buscamos todos los iframes de video (Dailymotion, Netu, etc)
         document.select("iframe").forEach { iframe ->
             var src = iframe.attr("src")
             
-            if (src.isNotEmpty() && !src.contains("facebook.com") && !src.contains("twitter.com")) {
-                // Corregir protocolos relativos (//dominio.com -> https://dominio.com)
+            if (src.isNotEmpty()) {
                 if (src.startsWith("//")) src = "https:$src"
                 
-                // loadExtractor se encarga de llamar al extractor de Dailymotion, Netu, etc.
-                loadExtractor(src, data, subtitleCallback, callback)
+                // Excluimos widgets de redes sociales para no perder tiempo
+                if (!src.contains("facebook.com") && !src.contains("twitter.com") && !src.contains("google.com")) {
+                    // loadExtractor intentará resolver automáticamente Dailymotion y otros
+                    loadExtractor(src, data, subtitleCallback, callback)
+                }
             }
         }
         return true
