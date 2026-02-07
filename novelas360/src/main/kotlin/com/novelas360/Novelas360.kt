@@ -1,4 +1,4 @@
-package com.phisher98
+package com.novelas360
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
