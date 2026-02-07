@@ -1,8 +1,6 @@
 name: Build Cloudstream Extension (DEX)
 
 on:
-  push:
-    branches: [ master, main ]
   workflow_dispatch:
 
 jobs:
@@ -22,8 +20,11 @@ jobs:
       - name: Grant execute permission
         run: chmod +x gradlew
 
-      - name: Build project
-        run: ./gradlew build
+      - name: Create local.properties
+        run: echo "sdk.dir=/tmp" > local.properties
+
+      - name: Build  extension
+        run: ./gradlew :IPTVPlayer:assembleRelease
 
       - name: Install tools
         run: |
@@ -35,6 +36,17 @@ jobs:
       - name: Convert AAR to DEX
         run: |
           mkdir -p output
+          AAR=$(find Anichi -name "*.aar" | head -n 1)
+          echo "Using AAR: $AAR"
+          unzip "$AAR" -d aar
+          unzip aar/classes.jar -d classes
+          build-tools/android-13/d8 classes --output output
+
+      - name: Upload DEX
+        uses: actions/upload-artifact@v4
+        with:
+          name: Anichi-dex
+          path: output/classes.dex          mkdir -p output
           AAR=$(find . -name "*.aar" | head -n 1)
           echo "Using AAR: $AAR"
           unzip "$AAR" -d aar
