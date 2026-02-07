@@ -12,14 +12,11 @@ class Novelas360 : MainAPI() {
     override var lang = "es"
     override val supportedTypes = setOf(TvType.TvSeries)
 
-    // ==============================
-    // HEADERS (evita HTML vacío)
-    // ==============================
     private suspend fun getDoc(url: String) =
         app.get(
             url,
             headers = mapOf(
-                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                "User-Agent" to "Mozilla/5.0",
                 "Referer" to mainUrl
             )
         ).document
@@ -29,9 +26,6 @@ class Novelas360 : MainAPI() {
         return if (url.startsWith("//")) "https:$url" else url
     }
 
-    // ==============================
-    // MAIN PAGE (México)
-    // ==============================
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
@@ -49,9 +43,6 @@ class Novelas360 : MainAPI() {
         )
     }
 
-    // ==============================
-    // SEARCH
-    // ==============================
     override suspend fun search(query: String): List<SearchResponse> {
         val document = getDoc("$mainUrl/?s=$query")
 
@@ -73,9 +64,6 @@ class Novelas360 : MainAPI() {
         }
     }
 
-    // ==============================
-    // LOAD NOVELA (categoría)
-    // ==============================
     override suspend fun load(url: String): LoadResponse {
         val document = getDoc(url)
 
@@ -84,35 +72,23 @@ class Novelas360 : MainAPI() {
             ?.trim()
             ?: "Novela"
 
-        val episodes = document
-            .select("article")
-            .mapNotNull { article ->
-                val link = article.selectFirst("h2 a, h3 a")
-                    ?: return@mapNotNull null
+        val episodes = document.select("article").mapNotNull { article ->
+            val link = article.selectFirst("h2 a, h3 a") ?: return@mapNotNull null
+            val epUrl = link.attr("href")
+            if (epUrl.isBlank()) return@mapNotNull null
 
-                val epUrl = link.attr("href")
-                if (epUrl.isBlank()) return@mapNotNull null
-
-                newEpisode(epUrl) {
-                    name = link.text()
-                }
+            newEpisode(epUrl) {
+                name = link.text()
             }
+        }
 
-        return newTvSeriesLoadResponse(
-            title,
-            url,
-            TvType.TvSeries,
-            episodes
-        ) {
+        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
             posterUrl = fixUrl(
                 document.selectFirst("meta[property=og:image]")?.attr("content")
             )
         }
     }
 
-    // ==============================
-    // LOAD LINKS (reproductores)
-    // ==============================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -140,9 +116,6 @@ class Novelas360 : MainAPI() {
         return true
     }
 
-    // ==============================
-    // PARSER MAIN PAGE
-    // ==============================
     private fun Element.toCategoryResult(): SearchResponse? {
         val href = attr("href")
         if (href.isBlank()) return null
