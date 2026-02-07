@@ -85,19 +85,18 @@ class IPTVPlayer : MainAPI() {
     ): Boolean {
         val ld = parseJson<LoadData>(data)
         
-        // Usamos el constructor más básico de ExtractorLink para evitar el error de "prerelease"
-        val isM3u8 = ld.url.contains(".m3u") || ld.url.contains(".m3u8") || !ld.url.contains(".mpd")
-
+        // Usamos el constructor que no lanza el warning de 'deprecated'
+        // y que no es 'prerelease'. 
         callback.invoke(
             ExtractorLink(
-                this.name,
-                ld.title,
-                ld.url,
-                "",
-                Qualities.Unknown.value,
-                isM3u8, // Aquí pasamos si es m3u8 directamente
-                emptyMap(),
-                null
+                source = this.name,
+                name = ld.title,
+                url = ld.url,
+                referer = "",
+                quality = Qualities.Unknown.value,
+                type = if (ld.url.contains(".mpd")) ExtractorLinkType.DASH else ExtractorLinkType.M3U8,
+                headers = emptyMap(),
+                extractorData = null
             )
         )
         return true
