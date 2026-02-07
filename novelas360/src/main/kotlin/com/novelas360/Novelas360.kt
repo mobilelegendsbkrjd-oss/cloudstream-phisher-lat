@@ -48,7 +48,7 @@ class Novelas360 : MainAPI() {
         val document = app.get(data).document
         document.select(".entry-content iframe, .video-player-container iframe").forEach { iframe ->
             val src = iframe.attr("src").let { if (it.startsWith("//")) "https:$it" else it }
-            if (!src.contains("google")) { loadExtractor(src, data, subtitleCallback, callback) }
+            if (!src.contains("google")) loadExtractor(src, data, subtitleCallback, callback)
         }
         return true
     }
