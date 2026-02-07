@@ -45,8 +45,6 @@ class IPTVPlayer : MainAPI() {
         val list = lists.find { url == it.first || url.endsWith(it.first) || url.contains(it.first) }
             ?: throw ErrorLoadingException("Lista no encontrada: $url")
 
-        // Para esta versión, cargamos el primer canal de la lista como stream principal 
-        // o mantenemos la estructura de la lista según lo permita la API.
         return newLiveStreamLoadResponse(list.first, list.second, list.first) {
             this.posterUrl = list.third
             this.plot = "Transmisión en vivo"
@@ -66,7 +64,6 @@ class IPTVPlayer : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Si la data es un JSON de LoadData, lo procesamos, si es una URL directa (de load), la usamos.
         val url: String
         val title: String
         val mKey: String
@@ -88,11 +85,11 @@ class IPTVPlayer : MainAPI() {
         if (url.contains(".mpd") || mKey.isNotBlank()) {
             callback.invoke(
                 newDrmExtractorLink(
-                    this.name,
-                    title,
-                    url,
-                    null,
-                    UUID.randomUUID()
+                    source = this.name,
+                    name = title,
+                    url = url,
+                    type = null, // Aquí el compilador acepta null
+                    keyId = UUID.randomUUID()
                 ) {
                     this.quality = Qualities.Unknown.value
                     this.key = mKey.trim()
@@ -100,24 +97,25 @@ class IPTVPlayer : MainAPI() {
                 }
             )
         } else {
+            // USANDO CONSTRUCTOR DIRECTO CON PARÁMETROS NOMBRADOS
+            // Esto evita el error de 'val cannot be reassigned' y el mismatch de tipo
             callback.invoke(
-                newExtractorLink(
-                    this.name,
-                    title,
-                    url,
-                    ""
-                ) {
-                    this.quality = Qualities.Unknown.value
-                    // Propiedad interna para forzar el modo Live/HLS
-                    this.isM3u8 = true
-                }
+                ExtractorLink(
+                    source = this.name,
+                    name = title,
+                    url = url,
+                    referer = "",
+                    quality = Qualities.Unknown.value,
+                    type = ExtractorLinkType.M3U8, // Especificamos el tipo correctamente
+                    isM3u8 = true // Se pasa como val en el constructor
+                )
             )
         }
         return true
     }
 }
 
-/* ============== PARSER MANTENIDO CON CORRECCIÓN DE NULOS ============== */
+/* ============== PARSER ============== */
 
 data class Playlist(val items: List<PlaylistItem> = emptyList())
 data class PlaylistItem(
@@ -130,8 +128,9 @@ class IptvPlaylistParser {
     fun parseM3U(content: String): Playlist = parseM3U(content.byteInputStream())
     fun parseM3U(input: InputStream): Playlist {
         val reader = input.bufferedReader()
-        val firstLine = reader.readLine()
-        if (firstLine == null || !firstLine.startsWith("#EXTM3U")) throw Exception("M3U inválido")
+        val firstLine = reader.readLine() ?: throw Exception("M3U vacío")
+        if (!firstLine.startsWith("#EXTM3U")) throw Exception("M3U inválido")
+        
         val items = mutableListOf<PlaylistItem>()
         var currentTitle: String? = null
         var currentAttributes: Map<String, String> = emptyMap()
