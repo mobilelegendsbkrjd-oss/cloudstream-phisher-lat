@@ -85,18 +85,16 @@ class IPTVPlayer : MainAPI() {
     ): Boolean {
         val ld = parseJson<LoadData>(data)
         
-        // Usamos el constructor que no lanza el warning de 'deprecated'
-        // y que no es 'prerelease'. 
+        // Usamos la función que el segundo código confirmó que compila sin errores
+        // Pasamos null en el tipo para que la librería lo maneje internamente
         callback.invoke(
-            ExtractorLink(
+            newExtractorLink(
                 source = this.name,
                 name = ld.title,
                 url = ld.url,
                 referer = "",
                 quality = Qualities.Unknown.value,
-                type = if (ld.url.contains(".mpd")) ExtractorLinkType.DASH else ExtractorLinkType.M3U8,
-                headers = emptyMap(),
-                extractorData = null
+                type = INFER_TYPE // Esto es lo que usa el segundo código
             )
         )
         return true
