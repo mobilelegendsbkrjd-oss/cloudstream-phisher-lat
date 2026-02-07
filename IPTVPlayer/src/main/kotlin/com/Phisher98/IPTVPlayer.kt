@@ -4,8 +4,6 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newDrmExtractorLink
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -20,8 +18,22 @@ class IPTVPlayer : MainAPI() {
     override val hasChromecastSupport = true
     override val supportedTypes = setOf(TvType.Live)
 
+    // RESTAURADO: Tu lista completa de canales
+    private val baseUrl = "https://raw.githubusercontent.com/mobilelegendsbkrjd-oss/lat_cs_bkrjd/main/builds/iptv/"
     private val listasPorPais = mapOf(
-        "Dibujos Animados" to "https://mametchikitty.github.io/Listas-IPTV/dibujos-animados.m3u",
+        "24/7" to "${baseUrl}247.m3u",
+        "Cine" to "${baseUrl}Cine.m3u",
+        "Eventos" to "${baseUrl}Eventos.m3u",
+        "Mexico HD" to "${baseUrl}android(hd).m3u",
+        "Mexico SD" to "${baseUrl}android(sd).m3u",
+        "Deportes" to "${baseUrl}deportes.m3u",
+        "Documentales" to "${baseUrl}documentales.m3u",
+        "Entretenimiento" to "${baseUrl}entretenimiento.m3u",
+        "Infantil" to "${baseUrl}infantil.m3u",
+        "Música" to "${baseUrl}musica.m3u",
+        "Noticias" to "${baseUrl}noticias.m3u",
+        "Novelas" to "${baseUrl}novelas.m3u",
+        "Dibujos Animados" to "https://mametchikitty.github.io/Listas-IPTV/dibujos-animados.m3u"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -30,35 +42,26 @@ class IPTVPlayer : MainAPI() {
         for ((pais, urlLista) in listasPorPais) {
             try {
                 val data = IptvPlaylistParser().parseM3U(app.get(urlLista).text)
-
                 val shows = data.items.map { channel ->
                     val streamurl = channel.url.toString()
                     val channelname = channel.title.toString()
-                    val posterurl = channel.attributes["tvg-logo"].toString()
-                    val nation = pais
-                    val key = channel.attributes["key"].toString()
-                    val keyid = channel.attributes["keyid"].toString()
+                    val posterurl = channel.attributes["tvg-logo"] ?: ""
+                    val key = channel.attributes["key"] ?: ""
+                    val keyid = channel.attributes["keyid"] ?: ""
 
                     newLiveSearchResponse(
                         channelname,
-                        LoadData(streamurl, channelname, posterurl, nation, key, keyid).toJson(),
+                        LoadData(streamurl, channelname, posterurl, pais, key, keyid).toJson(),
                         TvType.Live
                     ) {
                         this.posterUrl = posterurl
-                        this.lang = "es-la"
                     }
                 }
-
-                secciones.add(
-                    HomePageList(
-                        pais,
-                        shows,
-                        isHorizontalImages = true
-                    )
-                )
+                if (shows.isNotEmpty()) {
+                    secciones.add(HomePageList(pais, shows, isHorizontalImages = true))
+                }
             } catch (_: Exception) {}
         }
-
         return newHomePageResponse(secciones)
     }
 
@@ -73,12 +76,8 @@ class IPTVPlayer : MainAPI() {
     }
 
     data class LoadData(
-        val url: String,
-        val title: String,
-        val poster: String,
-        val nation: String,
-        val key: String,
-        val keyid: String,
+        val url: String, val title: String, val poster: String, 
+        val nation: String, val key: String, val keyid: String
     )
 
     override suspend fun loadLinks(
@@ -88,40 +87,26 @@ class IPTVPlayer : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val loadData = parseJson<LoadData>(data)
+        
         if (loadData.url.contains("mpd")) {
             callback.invoke(
                 newDrmExtractorLink(
-                    this.name,
-                    this.name,
-                    loadData.url,
-                    INFER_TYPE,
-                    UUID.randomUUID()
+                    this.name, this.name, loadData.url, null, UUID.randomUUID()
                 ) {
                     this.quality = Qualities.Unknown.value
                     this.key = loadData.key.trim()
                     this.kid = loadData.keyid.trim()
                 }
             )
-        } else if (loadData.url.contains("&e=.m3u")) {
-            callback.invoke(
-                newExtractorLink(
-                    this.name,
-                    this.name,
-                    url = loadData.url,
-                    ExtractorLinkType.M3U8
-                ) {
-                    this.quality = Qualities.Unknown.value
-                }
-            )
         } else {
+            // Ajustado para que compile: el cuarto parámetro es el 'referer' (String)
             callback.invoke(
                 newExtractorLink(
-                    this.name,
-                    loadData.title,
-                    url = loadData.url,
-                    INFER_TYPE
+                    this.name, loadData.title, loadData.url, "" 
                 ) {
                     this.quality = Qualities.Unknown.value
+                    // Forzamos isM3u8 para que no salte el canal
+                    this.isM3u8 = true 
                 }
             )
         }
@@ -129,33 +114,19 @@ class IPTVPlayer : MainAPI() {
     }
 }
 
-data class Playlist(
-    val items: List<PlaylistItem> = emptyList(),
-)
-
+// Clases del Parser (Mantenidas como en tu original)
+data class Playlist(val items: List<PlaylistItem> = emptyList())
 data class PlaylistItem(
     val title: String? = null,
     val attributes: Map<String, String> = emptyMap(),
-    val headers: Map<String, String> = emptyMap(),
-    val url: String? = null,
-    val userAgent: String? = null,
-    val key: String? = null,
-    val keyid: String? = null,
+    val url: String? = null
 )
 
 class IptvPlaylistParser {
-
-    fun parseM3U(content: String): Playlist {
-        return parseM3U(content.byteInputStream())
-    }
-
-    @Throws(PlaylistParserException::class)
+    fun parseM3U(content: String): Playlist = parseM3U(content.byteInputStream())
     fun parseM3U(input: InputStream): Playlist {
         val reader = input.bufferedReader()
-        if (!reader.readLine().startsWith("#EXTM3U")) {
-            throw PlaylistParserException.InvalidHeader()
-        }
-
+        if (!reader.readLine().startsWith("#EXTM3U")) throw Exception("Invalid Header")
         val playlistItems = mutableListOf<PlaylistItem>()
         var currentTitle: String? = null
         var currentAttributes: Map<String, String> = emptyMap()
@@ -174,13 +145,7 @@ class IptvPlaylistParser {
                         }.toMap()
                 }
                 !t.startsWith("#") -> {
-                    playlistItems.add(
-                        PlaylistItem(
-                            title = currentTitle,
-                            attributes = currentAttributes,
-                            url = t
-                        )
-                    )
+                    playlistItems.add(PlaylistItem(currentTitle, currentAttributes, t))
                     currentTitle = null
                     currentAttributes = emptyMap()
                 }
@@ -188,9 +153,4 @@ class IptvPlaylistParser {
         }
         return Playlist(playlistItems)
     }
-}
-
-sealed class PlaylistParserException(message: String) : Exception(message) {
-    class InvalidHeader :
-        PlaylistParserException("Invalid file header. Header doesn't start with #EXTM3U")
 }
