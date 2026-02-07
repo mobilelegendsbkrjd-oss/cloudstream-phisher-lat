@@ -1,11 +1,10 @@
 package com.phisher98
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
-import com.lagradost.cloudstream3.utils.*
 import java.io.InputStream
-import java.util.UUID
 
 class IPTVPlayer : MainAPI() {
     override var lang = "es"
@@ -32,7 +31,7 @@ class IPTVPlayer : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val shows = lists.map { (title, _, poster) ->
-            newLiveSearchResponse(title, title, TvType.Live) {
+            newTvSeriesSearchResponse(title, title, TvType.Live) {
                 this.posterUrl = poster
             }
         }
@@ -45,9 +44,31 @@ class IPTVPlayer : MainAPI() {
         val list = lists.find { url == it.first || url.endsWith(it.first) || url.contains(it.first) }
             ?: throw ErrorLoadingException("Lista no encontrada: $url")
 
-        return newLiveStreamLoadResponse(list.first, list.second, list.first) {
+        val data = IptvPlaylistParser().parseM3U(app.get(list.second).text)
+        val sorted = data.items
+            .filter { !it.title.isNullOrBlank() && !it.url.isNullOrBlank() }
+            .sortedBy { it.title!!.lowercase() }
+
+        val episodes = sorted.mapIndexed { index, ch ->
+            newEpisode(ch.url!!) {
+                this.name = ch.title!!
+                this.episode = index + 1
+                this.season = 1
+                this.posterUrl = ch.attributes["tvg-logo"] ?: ""
+                // Guardamos los datos necesarios en el string data
+                this.data = LoadData(
+                    url = ch.url!!,
+                    title = ch.title!!,
+                    key = ch.attributes["key"] ?: "",
+                    kid = ch.attributes["keyid"] ?: ""
+                ).toJson()
+            }
+        }
+
+        // Usamos la respuesta estándar de series pero marcada como Live
+        return newTvSeriesLoadResponse(list.first, list.first, TvType.Live, episodes) {
             this.posterUrl = list.third
-            this.plot = "Transmisión en vivo"
+            this.plot = "Canales en vivo: ${list.first}"
         }
     }
 
@@ -64,35 +85,34 @@ class IPTVPlayer : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val ld = if (data.startsWith("{")) parseJson<LoadData>(data) else null
-        val url = ld?.url ?: data
-        val title = ld?.title ?: this.name
+        val ld = parseJson<LoadData>(data)
 
-        if (url.contains(".mpd") || (ld?.key?.isNotBlank() == true)) {
-            callback.invoke(
-                newDrmExtractorLink(
-                    source = this.name,
-                    name = title,
-                    url = url,
-                    type = ExtractorLinkType.DASH,
-                    uuid = UUID.randomUUID() // Corregido según tu log: es 'uuid', no 'keyId'
-                ) {
-                    this.quality = Qualities.Unknown.value
-                    this.key = ld?.key?.trim() ?: ""
-                    this.kid = ld?.kid?.trim() ?: ""
-                }
-            )
-        } else {
-            // Usamos el constructor que tu log dice que SÍ existe
+        if (ld.url.contains(".mpd") || ld.key.isNotBlank()) {
+            // DRM para versión estable (sin parámetros experimentales)
             callback.invoke(
                 ExtractorLink(
                     source = this.name,
-                    name = title,
-                    url = url,
+                    name = ld.title,
+                    url = ld.url,
                     referer = "",
                     quality = Qualities.Unknown.value,
-                    type = ExtractorLinkType.M3U8, // Esto reemplaza el isM3u8 y detiene el salto de canales
-                    headers = emptyMap()
+                    type = ExtractorLinkType.DASH,
+                    headers = mapOf(
+                        "key" to ld.key.trim(),
+                        "kid" to ld.kid.trim()
+                    )
+                )
+            )
+        } else {
+            // M3U8 para versión estable
+            callback.invoke(
+                ExtractorLink(
+                    source = this.name,
+                    name = ld.title,
+                    url = ld.url,
+                    referer = "",
+                    quality = Qualities.Unknown.value,
+                    type = ExtractorLinkType.M3U8
                 )
             )
         }
@@ -100,7 +120,7 @@ class IPTVPlayer : MainAPI() {
     }
 }
 
-/* ============== PARSER ORIGINAL ============== */
+/* ============== PARSER MANTENIDO ============== */
 
 data class Playlist(val items: List<PlaylistItem> = emptyList())
 data class PlaylistItem(
@@ -143,4 +163,3 @@ class IptvPlaylistParser {
         return Playlist(items)
     }
 }
-
