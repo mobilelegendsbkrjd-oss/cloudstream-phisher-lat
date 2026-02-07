@@ -13,6 +13,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.phisher98.XDMovies.Companion.TMDBIMAGEBASEURL
+import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import java.net.URI
 
@@ -37,7 +38,9 @@ class Hubdrive : ExtractorApi() {
 class HubCloud : ExtractorApi() {
 
     override val name = "Hub-Cloud"
-    override val mainUrl = "https://hubcloud.*"
+    override var mainUrl: String = runBlocking {
+        XDMoviesProvider.getDomains()?.hubcloud ?: "https://hubcloud.foo"
+    }
     override val requiresReferer = false
 
     override suspend fun getUrl(
@@ -176,7 +179,7 @@ class HubCloud : ExtractorApi() {
                         ) { this.quality = quality }
                     )
                 }
-
+                /*
                 "10gbps" in label -> {
                     var current = link
 
@@ -198,6 +201,8 @@ class HubCloud : ExtractorApi() {
 
                     Log.e(tag, "10Gbps: Redirect limit reached")
                 }
+
+                 */
 
                 else -> {
                     loadExtractor(link, "", subtitleCallback, callback)
@@ -222,37 +227,51 @@ class HubCloud : ExtractorApi() {
     }
 
     private fun cleanTitle(title: String): String {
-        val parts = title.split(".", "-", "_")
 
-        val qualityTags = listOf(
-            "WEBRip", "WEB-DL", "WEB", "BluRay", "HDRip", "DVDRip", "HDTV",
-            "CAM", "TS", "R5", "DVDScr", "BRRip", "BDRip", "DVD", "PDTV", "HD"
+        val name = title.replace(Regex("\\.[a-zA-Z0-9]{2,4}$"), "")
+
+        val normalized = name
+            .replace(Regex("WEB[-_. ]?DL", RegexOption.IGNORE_CASE), "WEB-DL")
+            .replace(Regex("WEB[-_. ]?RIP", RegexOption.IGNORE_CASE), "WEBRIP")
+            .replace(Regex("H[ .]?265", RegexOption.IGNORE_CASE), "H265")
+            .replace(Regex("H[ .]?264", RegexOption.IGNORE_CASE), "H264")
+            .replace(Regex("DDP[ .]?([0-9]\\.[0-9])", RegexOption.IGNORE_CASE), "DDP$1")
+
+        val parts = normalized.split(" ", "_", ".")
+
+        val sourceTags = setOf(
+            "WEB-DL", "WEBRIP", "BLURAY", "HDRIP",
+            "DVDRIP", "HDTV", "CAM", "TS", "BRRIP", "BDRIP"
         )
 
-        val audioTags = listOf("AAC", "AC3", "DTS", "MP3", "FLAC", "DD5", "EAC3", "Atmos")
-        val subTags = listOf("ESub", "ESubs", "Subs", "MultiSub", "NoSub", "EnglishSub", "HindiSub")
-        val codecTags = listOf("x264", "x265", "H264", "HEVC", "AVC")
+        val codecTags = setOf("H264", "H265", "X264", "X265", "HEVC", "AVC")
 
-        val startIndex = parts.indexOfFirst { part ->
-            qualityTags.any { part.contains(it, true) }
+        val audioTags = setOf("AAC", "AC3", "DTS", "MP3", "FLAC", "DD", "DDP", "EAC3")
+
+        val audioExtras = setOf("ATMOS")
+
+        val hdrTags = setOf("SDR","HDR", "HDR10", "HDR10+", "DV", "DOLBYVISION")
+
+        val filtered = parts.mapNotNull { part ->
+            val p = part.uppercase()
+
+            when {
+                sourceTags.contains(p) -> p
+                codecTags.contains(p) -> p
+                audioTags.any { p.startsWith(it) } -> p
+                audioExtras.contains(p) -> p
+                hdrTags.contains(p) -> {
+                    when (p) {
+                        "DV", "DOLBYVISION" -> "DOLBYVISION"
+                        else -> p
+                    }
+                }
+                p == "NF" || p == "CR" -> p
+                else -> null
+            }
         }
 
-        val endIndex = parts.indexOfLast { part ->
-            subTags.any { part.contains(it, true) } ||
-                    audioTags.any { part.contains(it, true) } ||
-                    codecTags.any { part.contains(it, true) }
-        }
-
-        return when {
-            startIndex != -1 && endIndex != -1 && endIndex >= startIndex ->
-                parts.subList(startIndex, endIndex + 1).joinToString(".")
-
-            startIndex != -1 ->
-                parts.subList(startIndex, parts.size).joinToString(".")
-
-            else ->
-                parts.takeLast(3).joinToString(".")
-        }
+        return filtered.distinct().joinToString(" ")
     }
 }
 
@@ -260,7 +279,7 @@ class HubCloud : ExtractorApi() {
 class XdMoviesExtractor : ExtractorApi() {
 
     override val name = "XdMoviesExtractor"
-    override val mainUrl = "https://link.xdmovies.site"
+    override val mainUrl = "https://link.xdmovies.wtf"
     override val requiresReferer = false
 
     override suspend fun getUrl(
@@ -314,41 +333,52 @@ suspend fun fetchTmdbLogoUrl(
     tmdbId: Int?,
     appLangCode: String?
 ): String? {
-
     if (tmdbId == null) return null
 
-    val appLang = appLangCode
-        ?.substringBefore("-")
-        ?.lowercase()
-
+    val appLang = appLangCode?.substringBefore("-")?.lowercase()
     val url = if (type == TvType.Movie) {
         "$tmdbAPI/movie/$tmdbId/images?api_key=$apiKey"
     } else {
         "$tmdbAPI/tv/$tmdbId/images?api_key=$apiKey"
     }
 
-    val json = runCatching { JSONObject(app.get(url).text) }.getOrNull()
-        ?: return null
-
+    val json = runCatching { JSONObject(app.get(url).text) }.getOrNull() ?: return null
     val logos = json.optJSONArray("logos") ?: return null
     if (logos.length() == 0) return null
 
     fun logoUrlAt(i: Int): String = "https://image.tmdb.org/t/p/w500${logos.getJSONObject(i).optString("file_path")}"
+    fun isSvg(i: Int): Boolean = logos.getJSONObject(i).optString("file_path").endsWith(".svg", ignoreCase = true)
 
     if (!appLang.isNullOrBlank()) {
+        var svgFallback: String? = null
         for (i in 0 until logos.length()) {
             val logo = logos.optJSONObject(i) ?: continue
             if (logo.optString("iso_639_1") == appLang) {
+                if (isSvg(i)) {
+                    if (svgFallback == null) svgFallback = logoUrlAt(i)
+                } else {
+                    return logoUrlAt(i)
+                }
+            }
+        }
+        if (svgFallback != null) return svgFallback
+    }
+
+    var enSvgFallback: String? = null
+    for (i in 0 until logos.length()) {
+        val logo = logos.optJSONObject(i) ?: continue
+        if (logo.optString("iso_639_1") == "en") {
+            if (isSvg(i)) {
+                if (enSvgFallback == null) enSvgFallback = logoUrlAt(i)
+            } else {
                 return logoUrlAt(i)
             }
         }
     }
+    if (enSvgFallback != null) return enSvgFallback
 
     for (i in 0 until logos.length()) {
-        val logo = logos.optJSONObject(i) ?: continue
-        if (logo.optString("iso_639_1") == "en") {
-            return logoUrlAt(i)
-        }
+        if (!isSvg(i)) return logoUrlAt(i)
     }
 
     return logoUrlAt(0)

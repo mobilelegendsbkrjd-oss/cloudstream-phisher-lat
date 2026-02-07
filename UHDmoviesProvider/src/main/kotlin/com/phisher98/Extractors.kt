@@ -121,7 +121,8 @@ open class Driveseed : ExtractorApi() {
 
         val qualityText = document.selectFirst("li.list-group-item")?.text().orEmpty()
         val rawFileName = qualityText.replace("Name : ", "").trim()
-        val fileName = cleanTitle(rawFileName)
+        val cleaned = removeLeadingIndex(rawFileName)
+        val fileName = cleanTitle(cleaned)
         val size = document.selectFirst("li:nth-child(3)")?.text().orEmpty().replace("Size : ", "").trim()
 
         val labelExtras = buildString {
@@ -209,43 +210,62 @@ open class Driveseed : ExtractorApi() {
     }
 }
 
-
-fun cleanTitle(title: String): String {
-    val parts = title.split(".", "-", "_")
-
-    val qualityTags = listOf(
-        "WEBRip", "WEB-DL", "WEB", "BluRay", "HDRip", "DVDRip", "HDTV",
-        "CAM", "TS", "R5", "DVDScr", "BRRip", "BDRip", "DVD", "PDTV",
-        "HD"
+private fun removeLeadingIndex(title: String): String {
+    return title.replace(
+        Regex("^[\\[(]?\\s*\\d+\\s*[])\\-_.]*\\s*"),
+        ""
     )
-
-    val audioTags = listOf(
-        "AAC", "AC3", "DTS", "MP3", "FLAC", "DD5", "EAC3", "Atmos"
-    )
-
-    val subTags = listOf(
-        "ESub", "ESubs", "Subs", "MultiSub", "NoSub", "EnglishSub", "HindiSub"
-    )
-
-    val codecTags = listOf(
-        "x264", "x265", "H264", "HEVC", "AVC"
-    )
-
-    val startIndex = parts.indexOfFirst { part ->
-        qualityTags.any { tag -> part.contains(tag, ignoreCase = true) }
-    }
-
-    val endIndex = parts.indexOfLast { part ->
-        subTags.any { tag -> part.contains(tag, ignoreCase = true) } ||
-                audioTags.any { tag -> part.contains(tag, ignoreCase = true) } ||
-                codecTags.any { tag -> part.contains(tag, ignoreCase = true) }
-    }
-
-    return if (startIndex != -1 && endIndex != -1 && endIndex >= startIndex) {
-        parts.subList(startIndex, endIndex + 1).joinToString(".")
-    } else if (startIndex != -1) {
-        parts.subList(startIndex, parts.size).joinToString(".")
-    } else {
-        parts.takeLast(3).joinToString(".")
-    }
 }
+
+private fun cleanTitle(title: String): String {
+
+    val name = title.replace(Regex("\\.[a-zA-Z0-9]{2,4}$"), "")
+
+    val normalized = name
+        .replace(Regex("WEB[-_. ]?DL", RegexOption.IGNORE_CASE), "WEB-DL")
+        .replace(Regex("WEB[-_. ]?RIP", RegexOption.IGNORE_CASE), "WEBRIP")
+        .replace(Regex("H[ .]?265", RegexOption.IGNORE_CASE), "H265")
+        .replace(Regex("H[ .]?264", RegexOption.IGNORE_CASE), "H264")
+        .replace(Regex("DDP[ .]?([0-9]\\.[0-9])", RegexOption.IGNORE_CASE), "DDP$1")
+
+    val parts = normalized.split(" ", "_", ".")
+
+    val sourceTags = setOf(
+        "WEB-DL", "WEBRIP", "BLURAY", "HDRIP",
+        "DVDRIP", "HDTV", "CAM", "TS", "BRRIP", "BDRIP"
+    )
+
+    val codecTags = setOf("H264", "H265", "X264", "X265", "HEVC", "AVC")
+    val audioTags = setOf("AAC", "AC3", "DTS", "MP3", "FLAC", "DD", "DDP", "EAC3")
+    val audioExtras = setOf("ATMOS")
+    val hdrTags = setOf("SDR", "HDR", "HDR10", "HDR10+", "DV", "DOLBYVISION")
+
+    val tags = mutableListOf<String>()
+    val titleParts = mutableListOf<String>()
+
+    for (part in parts) {
+        val p = part.uppercase()
+
+        when {
+            sourceTags.contains(p) -> tags += p
+            codecTags.contains(p) -> tags += p
+            audioTags.any { p.startsWith(it) } -> tags += p
+            audioExtras.contains(p) -> tags += p
+            hdrTags.contains(p) -> tags += if (p == "DV" || p == "DOLBYVISION") "DOLBYVISION" else p
+            p == "NF" || p == "CR" -> tags += p
+            else -> titleParts += part
+        }
+    }
+
+    val cleanTitle = titleParts
+        .joinToString(" ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+
+    val cleanTags = tags.distinct().joinToString(" ")
+
+    return listOf(cleanTitle, cleanTags)
+        .filter { it.isNotBlank() }
+        .joinToString(" ")
+}
+

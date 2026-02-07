@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.Episode
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
+import com.lagradost.cloudstream3.LoadResponse.Companion.addKitsuId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageRequest
@@ -167,13 +168,18 @@ class AnimeKai : MainAPI() {
         val poster = document.select("div.poster img").attr("src")
         val syncMetaData = app.get("https://api.ani.zip/mappings?anilist_id=$aniid").toString()
         val animeMetaData = parseAnimeData(syncMetaData)
+        val kitsuid = animeMetaData?.mappings?.kitsuid
 
+        val data = anilistAPICall(
+            "query (\$id: Int = ${aniid}) { Media(id: \$id, type: ANIME) { id title { romaji english } startDate { year } genres description averageScore status bannerImage coverImage { extraLarge large medium } bannerImage episodes format nextAiringEpisode { episode } airingSchedule { nodes { episode } } recommendations { edges { node { id mediaRecommendation { id title { romaji english } coverImage { extraLarge large medium } } } } } } }"
+        ).data.media ?: throw Exception("Unable to fetch media details")
+
+        val backgroundposter = data.bannerImage ?: animeMetaData?.images?.find { it.coverType == "Fanart" }?.url ?: data.coverImage.extraLarge
+        ?: document.selectFirst(".anisc-poster img")?.attr("src")
         val title = document.selectFirst("h1.title")?.text().orEmpty()
         val jptitle = document.selectFirst("h1.title")?.attr("data-jp").orEmpty()
         val plot= document.selectFirst("div.desc")?.text()
-        val backgroundposter = animeMetaData?.images?.find { it.coverType == "Fanart" }?.url
-            ?: document.selectFirst(".anisc-poster img")?.attr("src")
-        val logoposter = animeMetaData?.images?.find { it.coverType == "Clearlogo" }?.url
+
         val animeId = document.selectFirst("div.rate-box")?.attr("data-id")
         val subCount = document.selectFirst("#main-entity div.info span.sub")?.text()?.toIntOrNull()
         val dubCount = document.selectFirst("#main-entity div.info span.dub")?.text()?.toIntOrNull()
@@ -246,7 +252,6 @@ class AnimeKai : MainAPI() {
             japName = jptitle
             posterUrl = poster
             backgroundPosterUrl = backgroundposter
-            try { this.logoUrl = logoposter } catch(_:Throwable){}
             addEpisodes(DubStatus.Subbed, subEpisodes)
             addEpisodes(DubStatus.Dubbed, dubEpisodes)
             this.recommendations = recommendations
@@ -255,6 +260,7 @@ class AnimeKai : MainAPI() {
             showStatus = status?.let { getStatus(it) }
             addMalId(malid.toIntOrNull())
             addAniListId(aniid.toIntOrNull())
+            try { addKitsuId(kitsuid) } catch(_:Throwable){}
         }
     }
 

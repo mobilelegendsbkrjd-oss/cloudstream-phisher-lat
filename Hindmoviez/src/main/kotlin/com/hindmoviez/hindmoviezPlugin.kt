@@ -1,16 +1,17 @@
-package com.Phisher98
+package com.hindmoviez
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.plugins.BasePlugin
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
+import com.lagradost.cloudstream3.app
+
 
 @CloudstreamPlugin
-class DramaDripProvider: BasePlugin() {
+class HindmoviezPlugin : BasePlugin() {
     override fun load() {
-        registerMainAPI(DramaDrip())
-        registerExtractorAPI(Driveseed())
+        registerMainAPI(Hindmoviez())
     }
+
     companion object {
         private const val DOMAINS_URL =
             "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json"
@@ -29,8 +30,8 @@ class DramaDripProvider: BasePlugin() {
         }
 
         data class Domains(
-            @JsonProperty("dramadrip")
-            val dramadrip: String,
+            @JsonProperty("hindmoviez")
+            val hindmoviez: String,
         )
     }
 }

@@ -66,7 +66,7 @@ class Filesdl : ExtractorApi() {
 class HubCloud : ExtractorApi() {
 
     override val name = "Hub-Cloud"
-    override val mainUrl = "https://hubcloud.*"
+    override val mainUrl = "https://hubcloud.foo"
     override val requiresReferer = false
 
     override suspend fun getUrl(
@@ -206,6 +206,7 @@ class HubCloud : ExtractorApi() {
                     )
                 }
 
+                /*
                 "10gbps" in label -> {
                     var current = link
 
@@ -228,6 +229,7 @@ class HubCloud : ExtractorApi() {
                     Log.e(tag, "10Gbps: Redirect limit reached")
                 }
 
+                 */
                 else -> {
                     loadExtractor(link, "", subtitleCallback, callback)
                 }
@@ -251,37 +253,51 @@ class HubCloud : ExtractorApi() {
     }
 
     private fun cleanTitle(title: String): String {
-        val parts = title.split(".", "-", "_")
 
-        val qualityTags = listOf(
-            "WEBRip", "WEB-DL", "WEB", "BluRay", "HDRip", "DVDRip", "HDTV",
-            "CAM", "TS", "R5", "DVDScr", "BRRip", "BDRip", "DVD", "PDTV", "HD"
+        val name = title.replace(Regex("\\.[a-zA-Z0-9]{2,4}$"), "")
+
+        val normalized = name
+            .replace(Regex("WEB[-_. ]?DL", RegexOption.IGNORE_CASE), "WEB-DL")
+            .replace(Regex("WEB[-_. ]?RIP", RegexOption.IGNORE_CASE), "WEBRIP")
+            .replace(Regex("H[ .]?265", RegexOption.IGNORE_CASE), "H265")
+            .replace(Regex("H[ .]?264", RegexOption.IGNORE_CASE), "H264")
+            .replace(Regex("DDP[ .]?([0-9]\\.[0-9])", RegexOption.IGNORE_CASE), "DDP$1")
+
+        val parts = normalized.split(" ", "_", ".")
+
+        val sourceTags = setOf(
+            "WEB-DL", "WEBRIP", "BLURAY", "HDRIP",
+            "DVDRIP", "HDTV", "CAM", "TS", "BRRIP", "BDRIP"
         )
 
-        val audioTags = listOf("AAC", "AC3", "DTS", "MP3", "FLAC", "DD5", "EAC3", "Atmos")
-        val subTags = listOf("ESub", "ESubs", "Subs", "MultiSub", "NoSub", "EnglishSub", "HindiSub")
-        val codecTags = listOf("x264", "x265", "H264", "HEVC", "AVC")
+        val codecTags = setOf("H264", "H265", "X264", "X265", "HEVC", "AVC")
 
-        val startIndex = parts.indexOfFirst { part ->
-            qualityTags.any { part.contains(it, true) }
+        val audioTags = setOf("AAC", "AC3", "DTS", "MP3", "FLAC", "DD", "DDP", "EAC3")
+
+        val audioExtras = setOf("ATMOS")
+
+        val hdrTags = setOf("SDR","HDR", "HDR10", "HDR10+", "DV", "DOLBYVISION")
+
+        val filtered = parts.mapNotNull { part ->
+            val p = part.uppercase()
+
+            when {
+                sourceTags.contains(p) -> p
+                codecTags.contains(p) -> p
+                audioTags.any { p.startsWith(it) } -> p
+                audioExtras.contains(p) -> p
+                hdrTags.contains(p) -> {
+                    when (p) {
+                        "DV", "DOLBYVISION" -> "DOLBYVISION"
+                        else -> p
+                    }
+                }
+                p == "NF" || p == "CR" -> p
+                else -> null
+            }
         }
 
-        val endIndex = parts.indexOfLast { part ->
-            subTags.any { part.contains(it, true) } ||
-                    audioTags.any { part.contains(it, true) } ||
-                    codecTags.any { part.contains(it, true) }
-        }
-
-        return when {
-            startIndex != -1 && endIndex != -1 && endIndex >= startIndex ->
-                parts.subList(startIndex, endIndex + 1).joinToString(".")
-
-            startIndex != -1 ->
-                parts.subList(startIndex, parts.size).joinToString(".")
-
-            else ->
-                parts.takeLast(3).joinToString(".")
-        }
+        return filtered.distinct().joinToString(" ")
     }
 }
 
