@@ -18,9 +18,9 @@ android {
 }
 
 dependencies {
-    implementation("org.jetbrains.kotlin:kotlin-stdlib:1.8.10")
-    implementation("com.lagradost:cloudstream3:latest-release")
+    implementation(project(":CloudStream3")) // proyecto local
     implementation("org.jsoup:jsoup:1.15.3")
+    implementation("org.jetbrains.kotlin:kotlin-stdlib:1.8.10")
 }
 
 version = 2
@@ -30,13 +30,9 @@ cloudstream {
     language = "mx"
     authors = listOf("bkrjd")
 
-    // Status:
-    // 0: Down, 1: Ok, 2: Slow, 3: Beta only
-    status = 1
+    status = 1 // 0: Down, 1: Ok, 2: Slow, 3: Beta only
 
-    // List of video source types (CloudStream TVType)
-    tvTypes = listOf("TvSeries") 
-
+    tvTypes = listOf("TvSeries")
     iconUrl = "https://novelas360.com/logo.png"
 
     isCrossPlatform = false
