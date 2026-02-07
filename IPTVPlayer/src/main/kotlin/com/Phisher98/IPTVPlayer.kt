@@ -85,23 +85,24 @@ class IPTVPlayer : MainAPI() {
     ): Boolean {
         val ld = parseJson<LoadData>(data)
         
-        // Usamos la función que el segundo código confirmó que compila sin errores
-        // Pasamos null en el tipo para que la librería lo maneje internamente
+        // Esta es la sintaxis exacta del segundo código que sí compila.
+        // Solo 3 parámetros obligatorios y el resto en el bloque { }
         callback.invoke(
             newExtractorLink(
-                source = this.name,
-                name = ld.title,
-                url = ld.url,
-                referer = "",
-                quality = Qualities.Unknown.value,
-                type = INFER_TYPE // Esto es lo que usa el segundo código
-            )
+                this.name,
+                ld.title,
+                ld.url
+            ) {
+                this.quality = Qualities.Unknown.value
+                // Usamos la propiedad del bloque para evitar errores de constructor
+                this.type = ExtractorLinkType.M3U8
+            }
         )
         return true
     }
 }
 
-/* ============== PARSER ============== */
+/* ============== TU PARSER ORIGINAL ============== */
 
 data class Playlist(val items: List<PlaylistItem> = emptyList())
 data class PlaylistItem(
