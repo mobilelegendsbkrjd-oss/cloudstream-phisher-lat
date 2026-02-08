@@ -2,6 +2,7 @@ package com.novelas360
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
@@ -63,6 +64,7 @@ class Novelas360 : MainAPI() {
 
             val title = item.selectFirst("h3")?.text() ?: return@mapNotNull null
             val img = item.selectFirst("img")
+
             val posterUrl = fixUrl(
                 img?.attr("data-src")?.ifBlank { img.attr("src") }
             )
@@ -82,7 +84,6 @@ class Novelas360 : MainAPI() {
         return if (url.contains("/categories/")) {
             loadCategoryAsSeries(document, url)
         } else {
-            // Fallback si entra directo a un capítulo
             val title = document.selectFirst("meta[property=og:title]")
                 ?.attr("content")
                 ?.substringBefore("–")
@@ -102,7 +103,6 @@ class Novelas360 : MainAPI() {
         }
     }
 
-    // OJO: debe ser suspend (compatibilidad legacy)
     private suspend fun loadCategoryAsSeries(
         document: Document,
         url: String
@@ -125,16 +125,17 @@ class Novelas360 : MainAPI() {
                 ?.attr("content")
         )
 
-        val episodes = document.select("div.item h3 a").mapIndexedNotNull { index, link ->
-            val epUrl = link.attr("href")
-            val name = link.text().trim()
-            if (epUrl.isBlank()) return@mapIndexedNotNull null
+        val episodes = document.select("div.item h3 a")
+            .mapIndexedNotNull { index, link ->
+                val epUrl = link.attr("href")
+                val name = link.text().trim()
+                if (epUrl.isBlank()) return@mapIndexedNotNull null
 
-            newEpisode(epUrl) {
-                this.name = name
-                this.episode = index + 1
+                newEpisode(epUrl) {
+                    this.name = name
+                    this.episode = index + 1
+                }
             }
-        }
 
         return newTvSeriesLoadResponse(
             title,
@@ -148,54 +149,74 @@ class Novelas360 : MainAPI() {
     }
 
     // ==============================
-    // LOAD LINKS
+    // LOAD LINKS (AJAX REAL)
     // ==============================
     override suspend fun loadLinks(
-    data: String,
-    isCasting: Boolean,
-    subtitleCallback: (SubtitleFile) -> Unit,
-    callback: (ExtractorLink) -> Unit
-): Boolean {
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
 
-    val document = getDoc(data)
+        val document = getDoc(data)
 
-    // 1️⃣ Sacar post_id de WordPress
-    val postId = document
-        .selectFirst("[id^=post-]")
-        ?.id()
-        ?.removePrefix("post-")
-        ?: return false
+        val postId = document
+            .selectFirst("[id^=post-]")
+            ?.id()
+            ?.removePrefix("post-")
+            ?: return false
 
-    // 2️⃣ Llamada AJAX real (Mars / Videotube)
-    val ajaxHtml = app.post(
-        "$mainUrl/wp-admin/admin-ajax.php",
-        data = mapOf(
-            "action" to "mars_load_video_player",
-            "post_id" to postId
-        ),
-        headers = mapOf(
-            "X-Requested-With" to "XMLHttpRequest",
-            "Referer" to data,
-            "User-Agent" to "Mozilla/5.0"
-        )
-    ).text
+        val ajaxHtml = app.post(
+            "$mainUrl/wp-admin/admin-ajax.php",
+            data = mapOf(
+                "action" to "mars_load_video_player",
+                "post_id" to postId
+            ),
+            headers = mapOf(
+                "X-Requested-With" to "XMLHttpRequest",
+                "Referer" to data,
+                "User-Agent" to "Mozilla/5.0"
+            )
+        ).text
 
-    // 3️⃣ Parsear HTML devuelto por AJAX
-    val ajaxDoc = org.jsoup.Jsoup.parse(ajaxHtml)
+        val ajaxDoc = Jsoup.parse(ajaxHtml)
 
-    ajaxDoc.select("iframe").forEach { iframe ->
-        var src = iframe.attr("src")
-        if (src.isBlank()) return@forEach
-        if (src.startsWith("//")) src = "https:$src"
+        ajaxDoc.select("iframe").forEach { iframe ->
+            var src = iframe.attr("src")
+            if (src.isBlank()) return@forEach
+            if (src.startsWith("//")) src = "https:$src"
 
-        if (
-            src.contains("dailymotion") ||
-            src.contains("ok.ru") ||
-            src.contains("netu")
-        ) {
-            loadExtractor(src, data, subtitleCallback, callback)
+            if (
+                src.contains("dailymotion") ||
+                src.contains("ok.ru") ||
+                src.contains("netu")
+            ) {
+                loadExtractor(src, data, subtitleCallback, callback)
+            }
         }
+
+        return true
     }
 
-    return true
+    // ==============================
+    // PARSER MAIN PAGE
+    // ==============================
+    private fun Element.toCategoryResult(): SearchResponse? {
+        val href = attr("href")
+        if (href.isBlank()) return null
+
+        val title = selectFirst("span.tabcontentnom")
+            ?.text()
+            ?.trim()
+            ?: return null
+
+        val img = selectFirst("img")
+        val posterUrl = fixUrl(
+            img?.attr("data-src")?.ifBlank { img.attr("src") }
+        )
+
+        return newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+            this.posterUrl = posterUrl
+        }
+    }
 }
