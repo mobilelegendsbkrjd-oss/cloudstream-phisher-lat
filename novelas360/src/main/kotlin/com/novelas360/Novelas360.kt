@@ -73,7 +73,6 @@ class Novelas360 : MainAPI() {
             episodes
         ) {
             posterUrl = poster
-            backdropUrl = poster
             this.plot = plot
         }
     }
@@ -89,15 +88,13 @@ class Novelas360 : MainAPI() {
 
         val document = app.get(data).document
 
-        // 1️⃣ Sacar post_id (WordPress)
         val postId = document
             .selectFirst("[id^=post-]")
             ?.id()
             ?.removePrefix("post-")
             ?: return false
 
-        // 2️⃣ Llamada AJAX real
-        val ajaxResponse = app.post(
+        val ajaxHtml = app.post(
             "$mainUrl/wp-admin/admin-ajax.php",
             data = mapOf(
                 "action" to "mars_load_video_player",
@@ -109,8 +106,7 @@ class Novelas360 : MainAPI() {
             )
         ).text
 
-        // 3️⃣ Parsear HTML devuelto
-        val ajaxDoc = Jsoup.parse(ajaxResponse)
+        val ajaxDoc = Jsoup.parse(ajaxHtml)
 
         ajaxDoc.select("iframe").forEach { iframe ->
             var src = iframe.attr("src")
