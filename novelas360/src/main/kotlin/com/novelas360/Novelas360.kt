@@ -50,11 +50,12 @@ class Novelas360 : MainAPI() {
         val home = categories.mapNotNull { (title, path) ->
             val doc = getDoc("$mainUrl$path") ?: return@mapNotNull null
             
-            // INTENTO 1: Buscar por estructura de grilla Bootstrap (muy común en temas WP)
-            // Busca divs que tengan clases tipo 'col-md-3', 'col-sm-4', etc, o la clase específica 'video-item'
-            val items = doc.select("div[class*='col-'], .video-item, article, .post")
+            // INTENTO 2: Combinar tu selector original con el estándar del tema
+            // 'div.tabcontent#Todos > a' -> Tu selector original (funciona para listas tipo texto/imagen)
+            // '.video-item' -> Selector estándar del tema Videotube para rejillas
+            val items = doc.select("div.tabcontent#Todos > a, .video-item, article.post")
                 .mapNotNull { it.toSearchResult() }
-                .distinctBy { it.url } // Evitar duplicados
+                .distinctBy { it.url }
 
             if (items.isEmpty()) null else HomePageList(title, items)
         }
@@ -68,29 +69,32 @@ class Novelas360 : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val document = getDoc("$mainUrl/?s=$query") ?: return emptyList()
 
-        // Usamos el mismo selector robusto que en main page
-        return document.select("div[class*='col-'], .video-item, article, .post, .search-result")
+        // Para búsqueda, el tema suele usar .video-item
+        return document.select(".video-item, article, .post")
             .mapNotNull { it.toSearchResult() }
             .distinctBy { it.url }
     }
 
     // ==============================
-    // PARSER (Detecta Título e Imagen automáticamente)
+    // PARSER (Híbrido)
     // ==============================
     private fun Element.toSearchResult(): SearchResponse? {
-        // Buscar el enlace principal (a veces es directo, a veces hijo)
-        val link = selectFirst("a") ?: return null
-        val href = link.attr("href")
-        if (href.isBlank() || href.contains("/page/")) return null // Evitar paginación
+        // DETECTAR TIPO DE ELEMENTO:
+        // Si el selector agarró un <a> directo (tu código original), úsalo.
+        // Si agarró un <div> (mi código nuevo), busca el <a> adentro.
+        val link = if (this.tagName() == "a") this else this.selectFirst("a")
+        
+        val href = link?.attr("href") ?: return null
+        if (href.isBlank()) return null
 
-        // Buscar Título: Prioridad h3 -> h2 -> title attr -> img alt
-        val title = selectFirst("h3, h2, .entry-title, .title")?.text()?.trim()
+        // Título: Busca en h3, h2, span (original) o atributo title
+        val title = this.selectFirst("h3, h2, span.tabcontentnom")?.text()?.trim()
             ?: link.attr("title").takeIf { it.isNotBlank() }
-            ?: selectFirst("img")?.attr("alt")?.takeIf { it.isNotBlank() }
+            ?: this.selectFirst("img")?.attr("alt")
             ?: return null
 
-        // Buscar Imagen
-        val img = selectFirst("img")
+        // Imagen
+        val img = this.selectFirst("img")
         val poster = fixUrl(
             img?.attr("data-src")?.ifBlank { img.attr("src") }
             ?: img?.attr("src")
@@ -107,7 +111,6 @@ class Novelas360 : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = getDoc(url) ?: throw ErrorLoadingException()
 
-        // Título de la serie
         val title = document.selectFirst("h1, h2.entry-title")?.text()?.trim()
             ?: document.selectFirst("meta[property=og:title]")?.attr("content")?.substringBefore("–")?.trim()
             ?: "Novela"
@@ -119,27 +122,24 @@ class Novelas360 : MainAPI() {
             document.selectFirst("meta[property=og:image]")?.attr("content")
         )
 
-        // Lista de Episodios: Busca enlaces que parezcan episodios dentro del contenido
-        // Filtra para asegurar que sean enlaces internos relevantes
-        val episodesAsc = document.select(".entry-content a, .post-content a, div.item h3 a")
+        // Selectores de episodios:
+        // 1. div.item h3 a -> Tu selector original
+        // 2. .entry-content a -> Enlaces dentro del texto del post (común en este sitio)
+        val episodesAsc = document.select("div.item h3 a, .entry-content a")
             .filter { 
                 val href = it.attr("href")
-                href.contains("/video/") || href.contains("capitulo") 
+                // Filtramos basura: debe tener /video/ o capitulo en la url
+                href.contains("/video/") || href.contains("capitulo", true)
             }
             .distinctBy { it.attr("href") }
             .mapIndexedNotNull { index, el ->
-                val epUrl = el.attr("href")
-                val epName = el.text().trim()
-                
-                if (epUrl.isBlank()) return@mapIndexedNotNull null
-
-                newEpisode(epUrl) {
-                    name = epName.ifBlank { "Capítulo ${index + 1}" }
+                newEpisode(el.attr("href")) {
+                    name = el.text().trim().ifBlank { "Capítulo ${index + 1}" }
                     episode = index + 1
                 }
             }
 
-        // Ordenamos descendente (más nuevo primero)
+        // Ordenamos descendente
         val episodes = episodesAsc.reversed()
 
         return newTvSeriesLoadResponse(
@@ -154,7 +154,7 @@ class Novelas360 : MainAPI() {
     }
 
     // ==============================
-    // LOAD LINKS
+    // LOAD LINKS (Sin cambios, esto ya funciona)
     // ==============================
     override suspend fun loadLinks(
         data: String,
@@ -165,11 +165,9 @@ class Novelas360 : MainAPI() {
 
         val document = getDoc(data) ?: return false
 
-        // Buscamos iframes comunes
         document.select("iframe").forEach { iframe ->
             val src = fixUrl(iframe.attr("src")) ?: return@forEach
-            
-            // Carga directa con Cloudstream (Maneja Okru, Dailymotion, Netu automáticamente)
+            // Carga el extractor nativo de Cloudstream (Maneja Dailymotion, OkRu, etc)
             loadExtractor(src, data, subtitleCallback, callback)
         }
         
