@@ -1,10 +1,44 @@
 package com.tlnovelas
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
 
+// =============================================================================
+// EXTRACTOR PARA PROCESAR EL JAVASCRIPT (e[0], e[1]...)
+// =============================================================================
+class TlnovelasExtractor : ExtractorApi() {
+    override val name = "Tlnovelas Extractor"
+    override val mainUrl = "https://ww2.tlnovelas.net"
+    override val requiresReferer = true
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): List<ExtractorLink> {
+        val response = app.get(url, referer = referer).text
+        
+        // Buscamos los links en el bloque JS: e[0]='...', e[1]='...'
+        val links = Regex("""e\[\d+\]\s*=\s*['"](https?://[^'"]+)['"]""").findAll(response)
+            .map { it.groupValues[1].replace("\\/", "/") }
+            .toList()
+
+        links.forEach { link ->
+            // Intentamos cargar cada link con los extractores base (Doodstream, Luluvdo, etc.)
+            loadExtractor(link, url, subtitleCallback, callback)
+        }
+        
+        return listOf() 
+    }
+}
+
+// =============================================================================
+// API PRINCIPAL DE TLNOVELAS
+// =============================================================================
 class Tlnovelas : MainAPI() {
 
     override var mainUrl = "https://ww2.tlnovelas.net"
@@ -73,7 +107,6 @@ class Tlnovelas : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
-
         val novelaLink = document.selectFirst("a[href*='/novela/']")?.attr("href")
 
         val finalDoc = if (url.contains("/ver/") && novelaLink != null)
@@ -128,34 +161,21 @@ class Tlnovelas : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // 1. Llamamos a nuestro extractor personalizado para resolver el JS
+        val extractor = TlnovelasExtractor()
+        extractor.getUrl(data, data, subtitleCallback, callback)
+
+        // 2. Fallback: buscamos iframes por si existen otros servidores directos
         val html = app.get(data).text
-        val videoLinks = mutableSetOf<String>()
-
-        // 1. Regex para el nuevo formato indexado: e[0]='...'
-        Regex("""e\[\d+\]\s*=\s*['"](https?://[^'"]+)['"]""").findAll(html).forEach {
-            videoLinks.add(it.groupValues[1].replace("\\/", "/"))
-        }
-
-        // 2. Regex para arrays JS estándar: var e = [...]
-        Regex("""var\s+e\s*=\s*\[([^\]]+)\]""").findAll(html).forEach { match ->
-            match.groupValues[1].split(",")
-                .map { it.trim().trim('\'', '"') }
-                .filter { it.startsWith("http") }
-                .forEach { videoLinks.add(it.replace("\\/", "/")) }
-        }
-
-        // 3. Regex para Iframes comunes
         Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
             .findAll(html)
-            .forEach { videoLinks.add(it.groupValues[1]) }
+            .forEach { 
+                val link = it.groupValues[1]
+                if (!link.contains("google") && !link.contains("adskeeper")) {
+                    loadExtractor(link, data, subtitleCallback, callback)
+                }
+            }
 
-        // Ejecutar los extractores para cada link hallado
-        for (link in videoLinks) {
-            try {
-                loadExtractor(link, data, subtitleCallback, callback)
-            } catch (_: Exception) { }
-        }
-
-        return videoLinks.isNotEmpty()
+        return true
     }
 }
