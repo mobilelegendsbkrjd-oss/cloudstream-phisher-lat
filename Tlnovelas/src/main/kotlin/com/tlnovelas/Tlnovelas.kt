@@ -80,8 +80,6 @@ class Tlnovelas : MainAPI() {
         val title =
             finalDoc.selectFirst("h1.card-title, .vk-title-main, h1")
                 ?.text()
-                ?.replace(Regex("(?i)Ver|Capitulos de"), "")
-                ?.trim()
                 ?: "Telenovela"
 
         val poster =
@@ -90,34 +88,25 @@ class Tlnovelas : MainAPI() {
                 ?: finalDoc.selectFirst(".ani-img img")?.attr("src")
 
         val description =
-            finalDoc.selectFirst(".card-text, .ani-description")
-                ?.text()
-                ?.replace(
-                    Regex("(?i)^Todos los Capitulos de tu novela[^:]*:\\s*"),
-                    ""
-                )
-                ?.trim()
+            finalDoc.selectFirst(".card-text, .ani-description")?.text()
 
         val episodes =
             finalDoc.select("a[href*='/ver/']")
-                .mapNotNull {
+                .map {
                     val epUrl = it.attr("href")
-
-                    val number =
-                        Regex("(?i)capitulo\\s*(\\d+)")
-                            .find(it.text())
-                            ?.groupValues
-                            ?.getOrNull(1)
-                            ?.toIntOrNull()
-                            ?: return@mapNotNull null
+                    val epName = it.text()
+                        .replace(title, "", true)
+                        .replace(Regex("(?i)Ver"), "")
+                        .trim()
 
                     newEpisode(epUrl) {
-                        name = "Capítulo $number"
-                        episode = number
+                        name =
+                            if (epName.isEmpty()) "Capítulo"
+                            else "Capítulo $epName"
                     }
                 }
                 .distinctBy { it.data }
-                .sortedBy { it.episode }
+                .reversed() // mantiene compatibilidad pero ordena
 
         return newTvSeriesLoadResponse(
             title,
