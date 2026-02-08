@@ -152,71 +152,55 @@ class Novelas360 : MainAPI() {
     // LOAD LINKS (AJAX REAL)
     // ==============================
     override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
+    data: String,
+    isCasting: Boolean,
+    subtitleCallback: (SubtitleFile) -> Unit,
+    callback: (ExtractorLink) -> Unit
+): Boolean {
 
-        val document = getDoc(data)
+    val doc = app.get(data).document
 
-        val postId = document
-            .selectFirst("[id^=post-]")
-            ?.id()
-            ?.removePrefix("post-")
-            ?: return false
+    // 1. iframe principal del capitulo
+    val iframeUrl = doc.selectFirst("iframe")?.attr("src")
+        ?: return false
 
-        val ajaxHtml = app.post(
-            "$mainUrl/wp-admin/admin-ajax.php",
-            data = mapOf(
-                "action" to "mars_load_video_player",
-                "post_id" to postId
-            ),
-            headers = mapOf(
-                "X-Requested-With" to "XMLHttpRequest",
-                "Referer" to data,
-                "User-Agent" to "Mozilla/5.0"
+    // 2. Entramos al iframe intermedio
+    val iframePage = app.get(iframeUrl).text
+
+    // 3. Buscar links de video dentro del JS o HTML
+    // Caso Dailymotion
+    Regex("""https://www.dailymotion.com/embed/video/([a-zA-Z0-9]+)""")
+        .find(iframePage)
+        ?.groupValues
+        ?.get(1)
+        ?.let { id ->
+            callback(
+                ExtractorLink(
+                    source = "Dailymotion",
+                    name = "Dailymotion",
+                    url = "https://www.dailymotion.com/video/$id",
+                    referer = iframeUrl,
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = false
+                )
             )
-        ).text
-
-        val ajaxDoc = Jsoup.parse(ajaxHtml)
-
-        ajaxDoc.select("iframe").forEach { iframe ->
-            var src = iframe.attr("src")
-            if (src.isBlank()) return@forEach
-            if (src.startsWith("//")) src = "https:$src"
-
-            if (
-                src.contains("dailymotion") ||
-                src.contains("ok.ru") ||
-                src.contains("netu")
-            ) {
-                loadExtractor(src, data, subtitleCallback, callback)
-            }
         }
 
-        return true
-    }
-
-    // ==============================
-    // PARSER MAIN PAGE
-    // ==============================
-    private fun Element.toCategoryResult(): SearchResponse? {
-        val href = attr("href")
-        if (href.isBlank()) return null
-
-        val title = selectFirst("span.tabcontentnom")
-            ?.text()
-            ?.trim()
-            ?: return null
-
-        val img = selectFirst("img")
-        val posterUrl = fixUrl(
-            img?.attr("data-src")?.ifBlank { img.attr("src") }
-        )
-
-        return newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
-            this.posterUrl = posterUrl
+    // 4. fallback: buscar cualquier mp4 o m3u8
+    Regex("""https?:\/\/[^\s'"]+\.(m3u8|mp4)""")
+        .findAll(iframePage)
+        .forEach {
+            callback(
+                ExtractorLink(
+                    source = "Novelas360",
+                    name = "Servidor",
+                    url = it.value,
+                    referer = iframeUrl,
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = it.value.endsWith("m3u8")
+                )
+            )
         }
-    }
+
+    return true
 }
