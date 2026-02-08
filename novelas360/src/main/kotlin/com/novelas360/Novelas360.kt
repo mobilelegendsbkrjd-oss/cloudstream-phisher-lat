@@ -1,4 +1,3 @@
-@file:Suppress("DEPRECATION") // ESTO ES CLAVE: Ignora el error de 'deprecated' en todo el archivo
 package com.novelas360
 
 import com.lagradost.cloudstream3.*
@@ -19,7 +18,10 @@ class Novelas360 : MainAPI() {
     private suspend fun getDoc(url: String): Document {
         return app.get(
             url,
-            headers = mapOf("User-Agent" to chromeUA, "Referer" to mainUrl)
+            headers = mapOf(
+                "User-Agent" to chromeUA,
+                "Referer" to mainUrl
+            )
         ).document
     }
 
@@ -49,37 +51,32 @@ class Novelas360 : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // Limpiamos la URL por si viene con /page/X/
-        val cleanUrl = url.replace(Regex("/page/\\d+/?$"), "").trimEnd('/')
-        val doc = getDoc(cleanUrl)
+        val doc = getDoc(url)
         val title = doc.selectFirst("h4 span, h1")?.text() ?: "Novela"
         val poster = fixUrl(doc.selectFirst("meta[property=og:image]")?.attr("content"))
         
         val allEpisodes = mutableListOf<Episode>()
-        var pageCount = 1
         
-        // --- PAGINACIÓN ROBUSTA ---
-        while (pageCount <= 40) {
-            val currentUrl = if (pageCount == 1) cleanUrl else "$cleanUrl/page/$pageCount/"
-            val pageDoc = try { 
-                val d = getDoc(currentUrl)
-                if (d.select("div.item h3 a").isEmpty()) null else d
-            } catch(e: Exception) { null }
+        // PAGINACIÓN MEJORADA (Basada en tu lógica original)
+        var pageCount = 1
+        while (pageCount <= 50) { 
+            val currentUrl = if (pageCount == 1) url else "${url.trimEnd('/')}/page/$pageCount/"
+            val pageDoc = if (pageCount == 1) doc else {
+                try { getDoc(currentUrl) } catch(e: Exception) { null }
+            }
 
-            if (pageDoc == null) break
+            val items = pageDoc?.select("div.item h3 a") ?: emptyList()
+            if (items.isEmpty()) break
             
-            val items = pageDoc.select("div.item h3 a")
             items.forEach { el ->
                 allEpisodes.add(newEpisode(el.attr("href")) {
                     this.name = el.text().trim()
                 })
             }
-            // Si la página tiene pocos items, ya acabamos
-            if (items.size < 5) break
             pageCount++
         }
 
-        return newTvSeriesLoadResponse(title, cleanUrl, TvType.TvSeries, allEpisodes.distinctBy { it.data }.reversed()) {
+        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, allEpisodes.distinctBy { it.data }.reversed()) {
             this.posterUrl = poster
             this.plot = doc.selectFirst("meta[name=description]")?.attr("content")
         }
@@ -96,35 +93,32 @@ class Novelas360 : MainAPI() {
         document.select("iframe").forEach { iframe ->
             val src = fixUrl(iframe.attr("src")) ?: return@forEach
             
-            // Si el video viene de novelas360.cyou, usamos el extractor manual para evitar Error IO
-            if (src.contains("novelas360.cyou")) {
-                val response = app.get(src, referer = data).text
-                // Buscamos el link m3u8 o mp4 en el script del reproductor
-                val videoUrl = Regex("""file:\s*"(https?.*?\.(?:m3u8|mp4).*?)"""").find(response)?.groupValues?.get(1)
-                    ?: Regex("""source:\s*"(https?.*?\.(?:m3u8|mp4).*?)"""").find(response)?.groupValues?.get(1)
+            val iframeHtml = app.get(src, headers = mapOf("Referer" to data, "User-Agent" to chromeUA)).text
+            
+            // Regex para capturar links de video
+            Regex("""(https?.*?\.(?:m3u8|mp4).*?)["']""").findAll(iframeHtml).forEach { match ->
+                val videoUrl = match.groupValues[1].replace("\\/", "/")
                 
-                if (videoUrl != null) {
-                    val finalUrl = videoUrl.replace("\\/", "/")
-                    callback(
-                        ExtractorLink(
-                            source = "Novelas360",
-                            name = "Servidor HD",
-                            url = finalUrl,
-                            referer = src,
-                            quality = Qualities.Unknown.value,
-                            isM3u8 = finalUrl.contains("m3u8"),
-                            headers = mapOf(
+                // TU SINTAXIS ORIGINAL QUE SÍ COMPILA
+                callback(
+                    newExtractorLink(
+                        "Novelas360",
+                        "Servidor Directo",
+                        videoUrl
+                    ) {
+                        this.quality = Qualities.Unknown.value
+                        // Parche para Error IO: Referer y Origin inyectados
+                        try {
+                            this.headers = mapOf(
                                 "User-Agent" to chromeUA,
                                 "Referer" to src,
-                                "Origin" to "https://novelas360.cyou",
-                                "Accept" to "*/*"
+                                "Origin" to "https://novelas360.cyou"
                             )
-                        )
-                    )
-                }
-            } else {
-                loadExtractor(src, data, subtitleCallback, callback)
+                        } catch(e: Exception) { }
+                    }
+                )
             }
+            loadExtractor(src, data, subtitleCallback, callback)
         }
         return true
     }
