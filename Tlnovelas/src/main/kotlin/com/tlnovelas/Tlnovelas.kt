@@ -22,24 +22,17 @@ class Tlnovelas : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page <= 1) "$mainUrl/${request.data}" else "$mainUrl/${request.data}/page/$page"
         val document = app.get(url).document
-        
-        // El sitio usa .vk-poster en la Home y .p-content o .ani-card en otras secciones
         val home = document.select(".vk-poster, .p-content, .ani-card").mapNotNull { 
             it.toSearchResult() 
         }
-        
         return newHomePageResponse(request.name, home, hasNext = true)
     }
 
     private fun Element.toSearchResult(): SearchResponse {
-        // Buscamos el título en los distintos lugares donde aparece según la sección
         val title = this.selectFirst(".vk-info p, .p-title, .ani-txt")?.text() 
             ?: this.selectFirst("a")?.attr("title") 
             ?: ""
-        
         val href = this.selectFirst("a")?.attr("href") ?: ""
-        
-        // Buscamos la imagen
         val posterUrl = this.selectFirst("img")?.attr("src")
         
         return newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
@@ -58,7 +51,6 @@ class Tlnovelas : MainAPI() {
         val poster = document.selectFirst("meta[property='og:image']")?.attr("content")
         val description = document.selectFirst(".card-text")?.text()
         
-        // Selector para capítulos (algunos están en la sidebar o en el cuerpo)
         val episodes = document.select("a[href*='/ver/']").map {
             val epHref = it.attr("href")
             val epName = it.attr("title").ifBlank { it.text().trim() }
@@ -73,7 +65,7 @@ class Tlnovelas : MainAPI() {
         }
     }
 
-        override suspend fun loadLinks(
+    override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -82,33 +74,29 @@ class Tlnovelas : MainAPI() {
         val response = app.get(data).text
         val document = Jsoup.parse(response)
         
-        // 1. Intentar extraer el ID del script e[0]='...'
+        // 1. Regex para capturar IDs de video de los scripts e[0], e[1], etc.
         val videoIdRegex = Regex("""e\[\d+\]\s*=\s*['"](.*?)['"]""")
         videoIdRegex.findAll(response).forEach { match ->
             val fullId = match.groupValues[1]
             if (fullId.contains("|")) {
                 val cleanId = fullId.substringBefore("|")
-                
-                // Intentamos cargar el reproductor interno del sitio con ese ID
-                // Nota: Esta URL es una conjetura basada en sitios similares de este template.
-                // Si tienes la URL del iframe que sale en tu PC al dar "Play", ponla aquí.
-                val internalUrl = "$mainUrl/tmp/reproductor.php?h=$cleanId"
-                loadExtractor(internalUrl, data, subtitleCallback, callback)
+                // Intentamos cargar el reproductor común de estas plantillas
+                val playerUrl = "$mainUrl/tmp/reproductor.php?h=$cleanId"
+                loadExtractor(playerUrl, data, subtitleCallback, callback)
             }
         }
 
-        // 2. Buscar iframes ocultos (en caso de que ya estén renderizados)
+        // 2. Escanear iframes existentes
         val iframes = document.select("iframe")
         for (iframe in iframes) {
-            var src = iframe.attr("src")
-            if (src.isBlank()) src = iframe.attr("data-src") // A veces usan lazy load
-            
+            val src = iframe.attr("src").let { 
+                if (it.startsWith("/")) "$mainUrl$it" else it 
+            }
             if (src.isNotBlank() && !src.contains("google") && !src.contains("facebook")) {
-                // Si la URL es relativa, la hacemos absoluta
-                val absoluteUrl = if (src.startsWith("/")) "$mainUrl$src" else src
-                loadExtractor(absoluteUrl, data, subtitleCallback, callback)
+                loadExtractor(src, data, subtitleCallback, callback)
             }
         }
         
         return true
     }
+}
