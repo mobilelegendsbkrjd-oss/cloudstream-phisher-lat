@@ -94,7 +94,7 @@ class Novelas360 : MainAPI() {
         }
     }
 
-    override suspend fun loadLinks(
+        override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -104,41 +104,38 @@ class Novelas360 : MainAPI() {
 
         document.select("iframe").forEach { iframe ->
             val src = fixUrl(iframe.attr("src")) ?: return@forEach
-            val iframeHtml = try { 
-                app.get(src, headers = mapOf("Referer" to data, "User-Agent" to chromeUA)).text 
-            } catch(e: Exception) { "" }
             
+            // 1. Intentamos cargar el HTML del iframe para ver si el link está ahí
+            val iframeRes = app.get(src, referer = data)
+            val iframeHtml = iframeRes.text
+            val iframeCookie = iframeRes.headers["set-cookie"] ?: ""
+
+            // 2. Buscamos el link del video (.m3u8 o .mp4)
             Regex("""(https?.*?\.(?:m3u8|mp4).*?)["']""").findAll(iframeHtml).forEach { match ->
                 val videoUrl = match.groupValues[1].replace("\\/", "/")
                 
                 callback(
-                    newExtractorLink("Novelas360", "Servidor Directo", videoUrl) {
+                    newExtractorLink(
+                        "Novelas360",
+                        "Servidor Principal",
+                        videoUrl
+                    ) {
                         this.quality = Qualities.Unknown.value
-                        try {
-                            this.headers = mapOf(
-                                "User-Agent" to chromeUA,
-                                "Referer" to src,
-                                "Origin" to "https://novelas360.cyou"
-                            )
-                        } catch(e: Exception) { }
+                        this.isM3u8 = videoUrl.contains("m3u8")
+                        // ESTO ES LO QUE ARREGLA EL ERROR IO:
+                        this.headers = mapOf(
+                            "User-Agent" to chromeUA,
+                            "Referer" to src, // El referer debe ser la URL del iframe
+                            "Origin" to "https://novelas360.cyou",
+                            "Accept" to "*/*",
+                            "Cookie" to iframeCookie // Pasamos la cookie de sesión si existe
+                        )
                     }
                 )
             }
+            
+            // 3. Si no funciona lo anterior, dejamos que los extractores estándar lo intenten
             loadExtractor(src, data, subtitleCallback, callback)
         }
         return true
     }
-
-    private fun Element.toSearchResult(): SearchResponse? {
-        val href = attr("href")
-        if (href.isNullOrBlank() || href.contains("/tag/") || href == mainUrl) return null
-        
-        val title = selectFirst(".tabcontentnom, h3, h2")?.text()?.trim() ?: return null
-        val img = selectFirst("img")
-        val poster = fixUrl(img?.attr("data-src")?.ifBlank { img.attr("src") })
-
-        return newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
-            this.posterUrl = poster
-        }
-    }
-}
