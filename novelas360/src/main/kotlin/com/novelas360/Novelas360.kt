@@ -13,13 +13,14 @@ class Novelas360 : MainAPI() {
     override var lang = "es"
     override val supportedTypes = setOf(TvType.TvSeries)
 
-    private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    // Cambiamos el User-Agent a uno de Chrome real para evitar el Error IO
+    private val chromeUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 
     private suspend fun getDoc(url: String): Document {
         return app.get(
             url,
             headers = mapOf(
-                "User-Agent" to userAgent,
+                "User-Agent" to chromeUA,
                 "Referer" to mainUrl
             )
         ).document
@@ -45,11 +46,11 @@ class Novelas360 : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val document = getDoc("$mainUrl/?s=$query")
-        return document.select(".video-item, article").mapNotNull { item ->
+        return document.select(".video-item").mapNotNull { item ->
             val link = item.selectFirst("a") ?: return@mapNotNull null
-            val title = item.selectFirst("h3, h2")?.text() ?: return@mapNotNull null
+            val title = item.selectFirst("h3")?.text() ?: return@mapNotNull null
             val img = item.selectFirst("img")
-            val poster = fixUrl(img?.attr("data-src")?.ifBlank { img.attr("src") } ?: img?.attr("src"))
+            val poster = fixUrl(img?.attr("data-src")?.ifBlank { img.attr("src") })
 
             newTvSeriesSearchResponse(title, link.attr("href"), TvType.TvSeries) {
                 this.posterUrl = poster
@@ -59,25 +60,19 @@ class Novelas360 : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val document = getDoc(url)
-
-        val title = document.selectFirst("h1, h4 span")?.text()?.trim()
-            ?: document.selectFirst("meta[property=og:title]")?.attr("content")?.substringBefore("–")?.trim()
-            ?: "Novela"
-
-        val plot = document.selectFirst(".entry-content p, meta[name=description]")?.text()
+        val title = document.selectFirst("h4 span")?.text() ?: "Novela"
+        val plot = document.selectFirst("meta[name=description]")?.attr("content")
         val poster = fixUrl(document.selectFirst("meta[property=og:image]")?.attr("content"))
 
-        val episodes = document.select("div.item h3 a, .entry-content a[href*='/video/'], .entry-content a[href*='capitulo']")
-            .distinctBy { it.attr("href") }
-            .mapIndexedNotNull { index, el ->
-                val epUrl = el.attr("href")
-                if (epUrl.isBlank()) return@mapIndexedNotNull null
-
-                newEpisode(epUrl) {
-                    this.name = el.text().trim().ifBlank { "Capítulo ${index + 1}" }
-                    this.episode = index + 1
-                }
-            }.sortedByDescending { it.episode }
+        // Mantenemos tu lógica de episodios
+        val episodes = document.select("div.item h3 a").mapIndexedNotNull { index, el ->
+            val epUrl = el.attr("href")
+            if (epUrl.isBlank()) return@mapIndexedNotNull null
+            newEpisode(epUrl) {
+                this.name = el.text().trim()
+                this.episode = index + 1
+            }
+        }
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
             this.plot = plot
@@ -94,26 +89,24 @@ class Novelas360 : MainAPI() {
         val document = getDoc(data)
 
         document.select("iframe").forEach { iframe ->
-            val src = fixUrl(iframe.attr("src")) ?: return@forEach
-            
+            var src = iframe.attr("src")
+            if (src.isBlank()) return@forEach
+            if (src.startsWith("//")) src = "https:$src"
+
+            // 1. Intentar con extractores oficiales (estos ya manejan sus propios headers)
             val loaded = loadExtractor(src, data, subtitleCallback, callback)
             
+            // 2. Si no es un extractor oficial, aplicar el fix de Referer/UA para evitar Error IO
             if (!loaded) {
-                val iframeHtml = app.get(src, headers = mapOf("Referer" to data, "User-Agent" to userAgent)).text
-                Regex("""https?:\/\/[^\s'"]+\.(mp4|m3u8)[^\s'"]*""").findAll(iframeHtml).forEach {
-                    val videoUrl = it.value
-                    
-                    // SOLUCIÓN DEFINITIVA PARA EL ERROR DE COMPILACIÓN:
-                    // Usamos la función con el bloque de inicialización {} sin pasar argumentos extra
+                val iframeHtml = app.get(src, headers = mapOf("Referer" to data, "User-Agent" to chromeUA)).text
+                Regex("""https?:\/\/[^\s'"]+\.(mp4|m3u8)""").findAll(iframeHtml).forEach {
                     callback(
                         newExtractorLink(
                             source = "Novelas360",
-                            name = "Servidor Externo",
-                            url = videoUrl
+                            name = "Servidor",
+                            url = it.value
                         ).apply {
-                            this.referer = src
-                            this.quality = Qualities.Unknown.value
-                            this.isM3u8 = videoUrl.contains("m3u8")
+                            this.referer = src // Esto es VITAL para quitar el Error IO
                         }
                     )
                 }
@@ -125,10 +118,9 @@ class Novelas360 : MainAPI() {
     private fun Element.toSearchResult(): SearchResponse? {
         val href = attr("href")
         if (href.isBlank()) return null
-
         val title = selectFirst("span.tabcontentnom")?.text()?.trim() ?: return null
         val img = selectFirst("img")
-        val poster = fixUrl(img?.attr("data-src")?.ifBlank { img.attr("src") } ?: img?.attr("src"))
+        val poster = fixUrl(img?.attr("data-src")?.ifBlank { img.attr("src") })
 
         return newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
             this.posterUrl = poster
