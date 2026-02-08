@@ -25,8 +25,6 @@ class Tlnovelas : MainAPI() {
     ): HomePageResponse {
         val url = if (page <= 1) "$mainUrl/${request.data}" else "$mainUrl/${request.data}/page/$page"
         val document = app.get(url).document
-        
-        // Selectores actualizados para capturar las sugerencias/carteles
         val home = document.select(".vk-poster, .ani-card, .p-content, .ani-txt")
             .mapNotNull { it.toSearchResult() }
             .distinctBy { it.url }
@@ -40,7 +38,6 @@ class Tlnovelas : MainAPI() {
         var href = selectFirst("a")?.attr("href") ?: ""
         val poster = selectFirst("img")?.attr("src")
 
-        // Lógica para convertir link de capítulo a link de novela (para ver todos los caps)
         if (href.contains("/ver/")) {
             val slug = href.removeSuffix("/").substringAfterLast("/")
                 .replace(Regex("(?i)-capitulo-\\d+|-capítulo-\\d+"), "")
@@ -61,8 +58,6 @@ class Tlnovelas : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
-        
-        // Si el usuario entra por un link de "ver capítulo", intentamos ir a la página principal de la novela
         val novelaLink = document.selectFirst("a[href*='/novela/']")?.attr("href")
         val finalDoc = if (url.contains("/ver/") && novelaLink != null) app.get(novelaLink).document else document
 
@@ -72,14 +67,11 @@ class Tlnovelas : MainAPI() {
         val poster = finalDoc.selectFirst("meta[property='og:image']")?.attr("content")
             ?: finalDoc.selectFirst(".ani-img img")?.attr("src")
 
-        // Extraer lista de episodios
         val episodes = finalDoc.select("a[href*='/ver/']").map {
             val epUrl = it.attr("href")
             val epName = it.text().replace(title, "", true)
                 .replace(Regex("(?i)Ver|Capitulo|Capítulo"), "").trim()
-            newEpisode(epUrl) { 
-                name = if (epName.isEmpty()) "Capítulo" else "Capítulo $epName"
-            }
+            newEpisode(epUrl) { name = if (epName.isEmpty()) "Capítulo" else "Capítulo $epName" }
         }.distinctBy { it.data }.reversed()
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
@@ -95,34 +87,36 @@ class Tlnovelas : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val response = app.get(data).text
-        val foundLinks = mutableListOf<String>()
+        val videoLinks = mutableSetOf<String>()
 
-        // 1. Extraer directamente del JS (Patrón e[0], e[1]...)
+        // 1. FORMATO NUEVO (e[0] = '...')
         Regex("""e\[\d+\]\s*=\s*['"](https?://[^'"]+)['"]""").findAll(response).forEach {
-            foundLinks.add(it.groupValues[1].replace("\\/", "/"))
+            videoLinks.add(it.groupValues[1].replace("\\/", "/"))
         }
 
-        // 2. Extraer de iframes (evitando anuncios)
+        // 2. FORMATO VIEJO (var e = ['...', '...'])
+        Regex("""var\s+e\s*=\s*\[([^\]]+)\]""").findAll(response).forEach { match ->
+            match.groupValues[1].split(",")
+                .map { it.trim().trim('\'', '"') }
+                .filter { it.startsWith("http") }
+                .forEach { videoLinks.add(it.replace("\\/", "/")) }
+        }
+
+        // 3. IFRAMES
         Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE).findAll(response).forEach {
             val link = it.groupValues[1]
             if (!link.contains("google") && !link.contains("adskeeper")) {
-                foundLinks.add(link)
+                videoLinks.add(link)
             }
         }
 
-        // 3. Procesar todos los links con el Referer correcto
-        var linksSent = 0
-        foundLinks.distinct().forEach { link ->
+        // Procesar todo sin excepción
+        videoLinks.forEach { link ->
             try {
-                // Forzamos el referer como la URL de la página para saltar protecciones
-                if (loadExtractor(link, data, subtitleCallback, callback)) {
-                    linksSent++
-                }
-            } catch (e: Exception) {
-                // Ignorar fallos individuales de extractores
-            }
+                loadExtractor(link, data, subtitleCallback, callback)
+            } catch (_: Exception) {}
         }
 
-        return linksSent > 0 || foundLinks.isNotEmpty()
+        return videoLinks.isNotEmpty()
     }
 }
