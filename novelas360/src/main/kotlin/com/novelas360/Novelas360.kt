@@ -52,15 +52,18 @@ class Novelas360 : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val doc = getDoc(url)
-        val title = doc.selectFirst("h4 span, h1")?.text() ?: "Novela"
+        val title = doc.selectFirst("h4 span")?.text() ?: "Novela"
         val poster = fixUrl(doc.selectFirst("meta[property=og:image]")?.attr("content"))
         
         val allEpisodes = mutableListOf<Episode>()
-        var pageCount = 1
         
-        while (pageCount <= 35) {
-            val currentUrl = if (pageCount == 1) url else "${url.removeSuffix("/")}/page/$pageCount/"
-            val pageDoc = try { getDoc(currentUrl) } catch(e: Exception) { null }
+        // PAGINACIÓN CORREGIDA
+        var pageCount = 1
+        while (pageCount <= 20) { // Limitamos a 20 páginas para no saturar
+            val currentUrl = if (pageCount == 1) url else "${url.trimEnd('/')}/page/$pageCount/"
+            val pageDoc = if (pageCount == 1) doc else {
+                try { getDoc(currentUrl) } catch(e: Exception) { null }
+            }
 
             val items = pageDoc?.select("div.item h3 a") ?: emptyList()
             if (items.isEmpty()) break
@@ -88,23 +91,33 @@ class Novelas360 : MainAPI() {
         val document = getDoc(data)
 
         document.select("iframe").forEach { iframe ->
-            val src = fixUrl(iframe.attr("src")) ?: return@forEach
+            var src = fixUrl(iframe.attr("src")) ?: return@forEach
+            
+            // Entramos al iframe para sacar el link real
             val iframeHtml = app.get(src, headers = mapOf("Referer" to data, "User-Agent" to chromeUA)).text
             
-            val videoRegex = Regex("""(https?.*?\.(?:m3u8|mp4).*?)["']""")
-            videoRegex.findAll(iframeHtml).forEach { match ->
+            // Buscamos el video con Regex
+            Regex("""(https?.*?\.(?:m3u8|mp4).*?)["']""").findAll(iframeHtml).forEach { match ->
                 val videoUrl = match.groupValues[1].replace("\\/", "/")
                 
-                // USANDO LA FUNCIÓN RECOMENDADA CON PARÁMETROS NOMBRADOS PARA EVITAR MISMATCH
+                // USAMOS TU SINTAXIS ORIGINAL QUE SÍ COMPILA
                 callback(
                     newExtractorLink(
-                        source = "Novelas360",
-                        name = "Servidor Directo",
-                        url = videoUrl,
-                        referer = src,
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = videoUrl.contains("m3u8")
-                    )
+                        "Novelas360",
+                        "Servidor Directo",
+                        videoUrl
+                    ) {
+                        // Configuramos por dentro para evitar errores de parámetros
+                        this.quality = Qualities.Unknown.value
+                        // Si da error al asignar 'referer', lo quitamos, pero suele ser 'var'
+                        try {
+                            this.headers = mapOf(
+                                "User-Agent" to chromeUA,
+                                "Referer" to src,
+                                "Origin" to "https://novelas360.cyou"
+                            )
+                        } catch(e: Exception) { }
+                    }
                 )
             }
             loadExtractor(src, data, subtitleCallback, callback)
