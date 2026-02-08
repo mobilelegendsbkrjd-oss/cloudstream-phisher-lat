@@ -65,33 +65,38 @@ class Tlnovelas : MainAPI() {
         }
     }
 
-    override suspend fun loadLinks(
+        override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val response = app.get(data).text
-        val document = Jsoup.parse(response)
         
-        // 1. Regex para capturar IDs de video de los scripts e[0], e[1], etc.
-        val videoIdRegex = Regex("""e\[\d+\]\s*=\s*['"](.*?)['"]""")
-        videoIdRegex.findAll(response).forEach { match ->
-            val fullId = match.groupValues[1]
-            if (fullId.contains("|")) {
-                val cleanId = fullId.substringBefore("|")
-                // Intentamos cargar el reproductor común de estas plantillas
-                val playerUrl = "$mainUrl/tmp/reproductor.php?h=$cleanId"
-                loadExtractor(playerUrl, data, subtitleCallback, callback)
+        // 1. Regex mejorado para capturar URLs completas dentro del array e[x]
+        // Busca patrones como e[0]='https://...'
+        val videoUrlRegex = Regex("""e\[\d+\]\s*=\s*['"](https?://.*?)['"]""")
+        
+        val foundLinks = videoUrlRegex.findAll(response).map { it.groupValues[1] }.toList()
+        
+        if (foundLinks.isEmpty()) {
+            // Si el regex de arriba falla, intentamos una búsqueda más agresiva de enlaces de video
+            val genericUrlRegex = Regex("""https?://[\w\d]+\.[\w\d]+(?:/[\w\d]+)*/e/[\w\d]+""")
+            genericUrlRegex.findAll(response).forEach { match ->
+                loadExtractor(match.value, data, subtitleCallback, callback)
+            }
+        } else {
+            for (link in foundLinks) {
+                // Limpiamos el link por si tiene carácteres de escape y cargamos el extractor
+                val cleanLink = link.replace("\\/", "/")
+                loadExtractor(cleanLink, data, subtitleCallback, callback)
             }
         }
 
-        // 2. Escanear iframes existentes
-        val iframes = document.select("iframe")
-        for (iframe in iframes) {
-            val src = iframe.attr("src").let { 
-                if (it.startsWith("/")) "$mainUrl$it" else it 
-            }
+        // 2. Por si acaso, revisamos iframes (aunque el script parece ser el método principal)
+        val document = Jsoup.parse(response)
+        document.select("iframe").forEach { iframe ->
+            val src = iframe.attr("src")
             if (src.isNotBlank() && !src.contains("google") && !src.contains("facebook")) {
                 loadExtractor(src, data, subtitleCallback, callback)
             }
