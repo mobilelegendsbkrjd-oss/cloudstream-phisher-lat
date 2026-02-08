@@ -58,12 +58,9 @@ class Novelas360 : MainAPI() {
         val allEpisodes = mutableListOf<Episode>()
         var pageCount = 1
         
-        // Paginación: Intentamos cargar hasta 30 páginas si existen
         while (pageCount <= 30) {
             val currentUrl = if (pageCount == 1) url else "${url.removeSuffix("/")}/page/$pageCount/"
-            val pageDoc = if (pageCount == 1) doc else {
-                try { getDoc(currentUrl) } catch(e: Exception) { null }
-            }
+            val pageDoc = try { getDoc(currentUrl) } catch(e: Exception) { null }
 
             val items = pageDoc?.select("div.item h3 a") ?: emptyList()
             if (items.isEmpty()) break
@@ -92,33 +89,29 @@ class Novelas360 : MainAPI() {
 
         document.select("iframe").forEach { iframe ->
             val src = fixUrl(iframe.attr("src")) ?: return@forEach
-            
-            // Bypass para novelas360.cyou y similares
             val iframeHtml = app.get(src, headers = mapOf("Referer" to data, "User-Agent" to chromeUA)).text
             
-            // Buscamos m3u8 o mp4
             val videoRegex = Regex("""(https?.*?\.(?:m3u8|mp4).*?)["']""")
             videoRegex.findAll(iframeHtml).forEach { match ->
                 val videoUrl = match.groupValues[1].replace("\\/", "/")
                 
-                // USANDO LA SINTAXIS QUE SÍ COMPILA (Solo 3 argumentos + bloque)
+                // USANDO UNA FORMA QUE NO REQUIERE REASIGNAR 'VAL'
                 callback(
-                    newExtractorLink(
-                        "Novelas360",
-                        "Servidor Directo",
-                        videoUrl
-                    ).apply {
-                        this.referer = src
-                        this.isM3u8 = videoUrl.contains("m3u8")
-                        this.headers = mapOf(
+                    ExtractorLink(
+                        source = "Novelas360",
+                        name = "Servidor Directo",
+                        url = videoUrl,
+                        referer = src,
+                        quality = Qualities.Unknown.value,
+                        isM3u8 = videoUrl.contains("m3u8"),
+                        headers = mapOf(
                             "User-Agent" to chromeUA,
                             "Referer" to src,
                             "Origin" to "https://novelas360.cyou"
                         )
-                    }
+                    )
                 )
             }
-            
             loadExtractor(src, data, subtitleCallback, callback)
         }
         return true
