@@ -3,6 +3,7 @@ package com.tlnovelas
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.nodes.Element
 
 class Tlnovelas : MainAPI() {
@@ -29,7 +30,8 @@ class Tlnovelas : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse {
-        var title = this.selectFirst(".vk-info p, .p-title, .ani-txt")?.text() 
+        // CORRECCIÓN DE NOMBRES EN HOME: Priorizamos .ani-txt que es el más común
+        var title = this.selectFirst(".ani-txt, .p-title, .vk-info p")?.text() 
             ?: this.selectFirst("a")?.attr("title") ?: ""
         
         var href = this.selectFirst("a")?.attr("href") ?: ""
@@ -52,38 +54,33 @@ class Tlnovelas : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
         
-        // Si entramos desde un link de "ver", intentamos saltar a la página de la novela
+        // Si entramos por error a un link de "ver", saltamos a la página de la novela
         val novelaLink = document.selectFirst("a[href*='/novela/']")?.attr("href")
         val finalDoc = if (novelaLink != null && url.contains("/ver/")) {
             app.get(novelaLink).document
         } else document
 
-        // CORRECCIÓN DE TÍTULO: Buscamos en varias etiquetas
+        // CORRECCIÓN TÍTULO "SIN NOMBRE": Buscamos el H1 real de la novela
         val title = finalDoc.selectFirst("h1.card-title, .vk-title-main, h1")?.text()
             ?.replace(Regex("(?i)Capitulos de|Ver"), "")?.trim() ?: "Telenovela"
             
-        // CORRECCIÓN DE IMAGEN: Usamos el meta tag de la novela
+        // IMAGEN INTERNA: Usamos meta de la novela o el poster de la ficha
         val poster = finalDoc.selectFirst("meta[property='og:image']")?.attr("content") 
             ?: finalDoc.selectFirst(".ani-img img")?.attr("src")
 
-        val description = finalDoc.selectFirst(".card-text, .ani-description")?.text()
-        
+        // EPISODIOS: Nombres cortos (Capítulo XX)
         val episodes = finalDoc.select("a[href*='/ver/']").mapNotNull {
             val epHref = it.attr("href")
-            // Limpieza de nombre de episodio para que no sea largo
-            val epName = it.text().trim()
-                .replace(title, "", ignoreCase = true)
-                .replace(Regex("(?i)Ver|Capitulo|Capítulo"), "")
-                .trim()
+            val epNumber = epHref.removeSuffix("/").substringAfterLast("-")
                 
             newEpisode(epHref) {
-                this.name = if(epName.isEmpty()) "Capítulo" else "Capítulo $epName"
+                this.name = "Capítulo $epNumber"
             }
         }.distinctBy { it.data }.reversed()
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
             this.posterUrl = poster
-            this.plot = description
+            this.plot = finalDoc.selectFirst(".card-text")?.text()
         }
     }
 
@@ -95,18 +92,49 @@ class Tlnovelas : MainAPI() {
     ): Boolean {
         val response = app.get(data).text
         
-        // Regex mejorado para capturar todas las variables e[0], e[1]...
+        // Capturamos el array e[0], e[1]...
         val videoUrlRegex = Regex("""e\[\d+\]\s*=\s*['"](https?://[^'"]+)['"]""")
         
         videoUrlRegex.findAll(response).forEach { match ->
             val link = match.groupValues[1].replace("\\/", "/")
             
-            // Forzamos la carga de cada link. 
-            // Si solo sale Playerwish, es probable que los otros dominios (bysejikuar, luluvdo) 
-            // no tengan un extractor nativo en Cloudstream.
-            loadExtractor(link, data, subtitleCallback, callback)
+            // 1. Intentamos con extractores nativos
+            val found = loadExtractor(link, data, subtitleCallback, callback)
+            
+            // 2. EXTRACTOR MANUAL (Para LuluStream, Byse y otros basados en JWPlayer)
+            if (!found) {
+                try {
+                    val serverHtml = app.get(link).text
+                    
+                    // Buscamos links .m3u8 o .mp4 dentro del código del servidor
+                    val fileRegex = Regex("""file\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""")
+                    val fileMatch = fileRegex.find(serverHtml)
+                    
+                    if (fileMatch != null) {
+                        val videoUrl = fileMatch.groupValues[1]
+                        val name = if (link.contains("lulu")) "LuluStream" else "Mirror Alterno"
+                        
+                        callback.invoke(
+                            ExtractorLink(
+                                name,
+                                name,
+                                videoUrl,
+                                link,
+                                Qualities.Unknown.value,
+                                isM3u8 = videoUrl.contains("m3u8")
+                            )
+                        )
+                    } else if (link.contains("byse")) {
+                        // Caso especial para Byse si no tiene link directo: mostrar como externo
+                        callback.invoke(
+                            ExtractorLink("Byse Server", "Byse Server", link, data, Qualities.Unknown.value)
+                        )
+                    }
+                } catch (e: Exception) {
+                    // Si falla la petición al servidor, ignoramos y seguimos
+                }
+            }
         }
-
         return true
     }
 }
