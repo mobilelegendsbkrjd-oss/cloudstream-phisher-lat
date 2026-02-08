@@ -67,7 +67,6 @@ class Novelas360 : MainAPI() {
         val plot = document.selectFirst(".entry-content p, meta[name=description]")?.text()
         val poster = fixUrl(document.selectFirst("meta[property=og:image]")?.attr("content"))
 
-        // Seccion de episodios mejorada para capturar listas largas
         val episodes = document.select("div.item h3 a, .entry-content a[href*='/video/'], .entry-content a[href*='capitulo']")
             .distinctBy { it.attr("href") }
             .mapIndexedNotNull { index, el ->
@@ -78,7 +77,7 @@ class Novelas360 : MainAPI() {
                     this.name = el.text().trim().ifBlank { "Capítulo ${index + 1}" }
                     this.episode = index + 1
                 }
-            }.sortedByDescending { it.episode } // Normalmente las novelas se ven mejor de reciente a antiguo
+            }.sortedByDescending { it.episode }
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
             this.plot = plot
@@ -97,22 +96,21 @@ class Novelas360 : MainAPI() {
         document.select("iframe").forEach { iframe ->
             val src = fixUrl(iframe.attr("src")) ?: return@forEach
             
-            // Primero intentamos con los extractores automáticos
             val loaded = loadExtractor(src, data, subtitleCallback, callback)
             
             if (!loaded) {
-                // Si no es un extractor conocido, buscamos el link de video manualmente
                 val iframeHtml = app.get(src, headers = mapOf("Referer" to data, "User-Agent" to userAgent)).text
                 Regex("""https?:\/\/[^\s'"]+\.(mp4|m3u8)[^\s'"]*""").findAll(iframeHtml).forEach {
                     val videoUrl = it.value
+                    // USANDO LA SINTAXIS CORRECTA PARA NEWEXTRACTORLINK
                     callback(
-                        ExtractorLink(
-                            source = "Novelas360",
-                            name = "Servidor Externo",
-                            url = videoUrl,
-                            referer = src,
-                            quality = Qualities.Unknown.value,
-                            isM3u8 = videoUrl.contains("m3u8")
+                        newExtractorLink(
+                            "Novelas360",
+                            "Servidor Externo",
+                            videoUrl,
+                            src,
+                            Qualities.Unknown.value,
+                            videoUrl.contains("m3u8")
                         )
                     )
                 }
