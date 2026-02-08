@@ -47,7 +47,9 @@ class Tlnovelas : MainAPI() {
         val poster = selectFirst("img")?.attr("src")
 
         if (href.contains("/ver/")) {
-            title = title.split(Regex("(?i)Capitulo|Capítulo"))[0].trim()
+            title = title
+                .split(Regex("(?i)Capitulo|Capítulo"))[0]
+                .trim()
 
             val slug = href
                 .removeSuffix("/")
@@ -78,7 +80,7 @@ class Tlnovelas : MainAPI() {
         val title =
             finalDoc.selectFirst("h1.card-title, .vk-title-main, h1")
                 ?.text()
-                ?.replace(Regex("(?i)Capitulos de|Ver"), "")
+                ?.replace(Regex("(?i)Ver|Capitulos de"), "")
                 ?.trim()
                 ?: "Telenovela"
 
@@ -88,25 +90,34 @@ class Tlnovelas : MainAPI() {
                 ?: finalDoc.selectFirst(".ani-img img")?.attr("src")
 
         val description =
-            finalDoc.selectFirst(".card-text, .ani-description")?.text()
+            finalDoc.selectFirst(".card-text, .ani-description")
+                ?.text()
+                ?.replace(
+                    Regex("(?i)^Todos los Capitulos de tu novela[^:]*:\\s*"),
+                    ""
+                )
+                ?.trim()
 
         val episodes =
             finalDoc.select("a[href*='/ver/']")
-                .map {
+                .mapNotNull {
                     val epUrl = it.attr("href")
-                    val epName = it.text()
-                        .replace(title, "", true)
-                        .replace(Regex("(?i)Ver|Capitulo|Capítulo"), "")
-                        .trim()
+
+                    val number =
+                        Regex("(?i)capitulo\\s*(\\d+)")
+                            .find(it.text())
+                            ?.groupValues
+                            ?.getOrNull(1)
+                            ?.toIntOrNull()
+                            ?: return@mapNotNull null
 
                     newEpisode(epUrl) {
-                        name =
-                            if (epName.isEmpty()) "Capítulo"
-                            else "Capítulo $epName"
+                        name = "Capítulo $number"
+                        episode = number
                     }
                 }
                 .distinctBy { it.data }
-                .reversed()
+                .sortedBy { it.episode }
 
         return newTvSeriesLoadResponse(
             title,
@@ -128,7 +139,7 @@ class Tlnovelas : MainAPI() {
 
         val html = app.get(data).text
 
-        // JS players (Playerwish, Byse, etc)
+        // JS players
         Regex("""e\[\d+\]\s*=\s*['"](https?://[^'"]+)['"]""")
             .findAll(html)
             .forEach {
@@ -140,7 +151,7 @@ class Tlnovelas : MainAPI() {
                 )
             }
 
-        // Iframes estándar (Streamwish, Vidhide, Lulu, Filemoon, Dood, Mixdrop)
+        // Iframes estándar
         Regex(
             """<iframe[^>]+src=["'](https?://[^"']+)["']""",
             RegexOption.IGNORE_CASE
