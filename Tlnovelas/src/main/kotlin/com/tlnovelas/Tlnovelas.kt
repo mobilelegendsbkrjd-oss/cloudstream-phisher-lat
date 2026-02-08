@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.nodes.Element
 
 class Tlnovelas : MainAPI() {
@@ -30,7 +31,6 @@ class Tlnovelas : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse {
-        // CORRECCIÓN DE NOMBRES EN HOME: Priorizamos .ani-txt que es el más común
         var title = this.selectFirst(".ani-txt, .p-title, .vk-info p")?.text() 
             ?: this.selectFirst("a")?.attr("title") ?: ""
         
@@ -38,7 +38,6 @@ class Tlnovelas : MainAPI() {
         val posterUrl = this.selectFirst("img")?.attr("src")
         
         if (href.contains("/ver/")) {
-            // Limpieza: "Amanecer Capítulo 69" -> "Amanecer"
             title = title.split(Regex("(?i)Capitulo|Capítulo"))[0].trim()
             val slug = href.removeSuffix("/").substringAfterLast("/")
                 .replace(Regex("(?i)-capitulo-\\d+"), "")
@@ -53,22 +52,17 @@ class Tlnovelas : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
-        
-        // Si entramos por error a un link de "ver", saltamos a la página de la novela
         val novelaLink = document.selectFirst("a[href*='/novela/']")?.attr("href")
         val finalDoc = if (novelaLink != null && url.contains("/ver/")) {
             app.get(novelaLink).document
         } else document
 
-        // CORRECCIÓN TÍTULO "SIN NOMBRE": Buscamos el H1 real de la novela
         val title = finalDoc.selectFirst("h1.card-title, .vk-title-main, h1")?.text()
             ?.replace(Regex("(?i)Capitulos de|Ver"), "")?.trim() ?: "Telenovela"
             
-        // IMAGEN INTERNA: Usamos meta de la novela o el poster de la ficha
         val poster = finalDoc.selectFirst("meta[property='og:image']")?.attr("content") 
             ?: finalDoc.selectFirst(".ani-img img")?.attr("src")
 
-        // EPISODIOS: Nombres cortos (Capítulo XX)
         val episodes = finalDoc.select("a[href*='/ver/']").mapNotNull {
             val epHref = it.attr("href")
             val epNumber = epHref.removeSuffix("/").substringAfterLast("-")
@@ -91,22 +85,15 @@ class Tlnovelas : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val response = app.get(data).text
-        
-        // Capturamos el array e[0], e[1]...
         val videoUrlRegex = Regex("""e\[\d+\]\s*=\s*['"](https?://[^'"]+)['"]""")
         
         videoUrlRegex.findAll(response).forEach { match ->
             val link = match.groupValues[1].replace("\\/", "/")
-            
-            // 1. Intentamos con extractores nativos
             val found = loadExtractor(link, data, subtitleCallback, callback)
             
-            // 2. EXTRACTOR MANUAL (Para LuluStream, Byse y otros basados en JWPlayer)
             if (!found) {
                 try {
                     val serverHtml = app.get(link).text
-                    
-                    // Buscamos links .m3u8 o .mp4 dentro del código del servidor
                     val fileRegex = Regex("""file\s*:\s*["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""")
                     val fileMatch = fileRegex.find(serverHtml)
                     
@@ -114,8 +101,9 @@ class Tlnovelas : MainAPI() {
                         val videoUrl = fileMatch.groupValues[1]
                         val name = if (link.contains("lulu")) "LuluStream" else "Mirror Alterno"
                         
+                        // CORRECCIÓN: Uso de newExtractorLink para evitar error de compilación
                         callback.invoke(
-                            ExtractorLink(
+                            newExtractorLink(
                                 name,
                                 name,
                                 videoUrl,
@@ -125,14 +113,11 @@ class Tlnovelas : MainAPI() {
                             )
                         )
                     } else if (link.contains("byse")) {
-                        // Caso especial para Byse si no tiene link directo: mostrar como externo
                         callback.invoke(
-                            ExtractorLink("Byse Server", "Byse Server", link, data, Qualities.Unknown.value)
+                            newExtractorLink("Byse Server", "Byse Server", link, data, Qualities.Unknown.value)
                         )
                     }
-                } catch (e: Exception) {
-                    // Si falla la petición al servidor, ignoramos y seguimos
-                }
+                } catch (e: Exception) { /* ignorar errores de red */ }
             }
         }
         return true
