@@ -15,21 +15,32 @@ class Tlnovelas : MainAPI() {
     override val supportedTypes       = setOf(TvType.TvSeries)
 
     override val mainPage = mainPageOf(
-        "gratis/online/" to "En Emisión",
+        "" to "Últimos Capítulos",
         "gratis/telenovelas/" to "Ver Telenovelas"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page <= 1) "$mainUrl/${request.data}" else "$mainUrl/${request.data}/page/$page"
         val document = app.get(url).document
-        val home = document.select(".ani-card").mapNotNull { it.toSearchResult() }
+        
+        // El sitio usa .vk-poster en la Home y .p-content o .ani-card en otras secciones
+        val home = document.select(".vk-poster, .p-content, .ani-card").mapNotNull { 
+            it.toSearchResult() 
+        }
+        
         return newHomePageResponse(request.name, home, hasNext = true)
     }
 
     private fun Element.toSearchResult(): SearchResponse {
-        val title     = this.selectFirst(".ani-txt")?.text() ?: ""
-        val href      = this.selectFirst("a")?.attr("href") ?: ""
-        val posterUrl = this.selectFirst(".ani-img img")?.attr("src")
+        // Buscamos el título en los distintos lugares donde aparece según la sección
+        val title = this.selectFirst(".vk-info p, .p-title, .ani-txt")?.text() 
+            ?: this.selectFirst("a")?.attr("title") 
+            ?: ""
+        
+        val href = this.selectFirst("a")?.attr("href") ?: ""
+        
+        // Buscamos la imagen
+        val posterUrl = this.selectFirst("img")?.attr("src")
         
         return newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
             this.posterUrl = posterUrl
@@ -38,22 +49,23 @@ class Tlnovelas : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl/buscar/?q=$query").document
-        return document.select(".ani-card").mapNotNull { it.toSearchResult() }
+        return document.select(".vk-poster, .p-content, .ani-card").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document    = app.get(url).document
-        val title       = document.selectFirst("h1.card-title")?.text() ?: "Sin título"
-        val poster      = document.selectFirst("meta[property='og:image']")?.attr("content")
+        val document = app.get(url).document
+        val title = document.selectFirst("h1.card-title, .vk-title-main")?.text() ?: "Sin título"
+        val poster = document.selectFirst("meta[property='og:image']")?.attr("content")
         val description = document.selectFirst(".card-text")?.text()
         
+        // Selector para capítulos (algunos están en la sidebar o en el cuerpo)
         val episodes = document.select("a[href*='/ver/']").map {
             val epHref = it.attr("href")
             val epName = it.attr("title").ifBlank { it.text().trim() }
             newEpisode(epHref) {
                 this.name = epName
             }
-        }.distinctBy { it.data }
+        }.distinctBy { it.data }.reversed()
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
             this.posterUrl = poster
@@ -68,18 +80,9 @@ class Tlnovelas : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val response = app.get(data).text
-        
-        // Extraer posibles IDs de video del script JS
-        val videoIdRegex = Regex("""e\[\d+\]\s*=\s*['"](.*?)['"]""")
-        videoIdRegex.findAll(response).forEach { match ->
-            val fullId = match.groupValues[1]
-            // Aquí se podría implementar lógica para servidores específicos como Fembed
-        }
-
-        // Parsear el HTML correctamente
         val document = Jsoup.parse(response)
         
-        // Ciclo for para manejar funciones suspendidas (loadExtractor)
+        // Extraer iframes de servidores externos
         val iframes = document.select("iframe")
         for (iframe in iframes) {
             val src = iframe.attr("src")
@@ -90,4 +93,4 @@ class Tlnovelas : MainAPI() {
         
         return true
     }
-} // <--- Esta es la llave que probablemente faltaba
+}
