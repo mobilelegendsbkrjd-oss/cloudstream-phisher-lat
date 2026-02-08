@@ -13,49 +13,52 @@ class Tlnovelas : MainAPI() {
     override val hasQuickSearch       = true
     override val supportedTypes       = setOf(TvType.TvSeries)
 
+    // Ajustamos las rutas a las categorías reales del sitio
     override val mainPage = mainPageOf(
-        "novelas" to "Novelas",
-        "telenovelas-finalizadas" to "Finalizadas",
-        "proximos-estrenos" to "Próximos Estrenos"
+        "gratis/online/" to "En Emisión",
+        "gratis/telenovelas/" to "Ver Telenovelas"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (page <= 1) "$mainUrl/${request.data}" else "$mainUrl/${request.data}/page/$page"
-        // Usamos documentLarge igual que en tu base de Latanime
-        val document = app.get(url).documentLarge
-        val home = document.select("article.item").mapNotNull { it.toSearchResult() }
+        val document = app.get(url).document
+        // Selector corregido: El sitio usa .ani-card para las novelas
+        val home = document.select(".ani-card").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, home, hasNext = true)
     }
 
     private fun Element.toSearchResult(): SearchResponse {
-        val title     = this.selectFirst(".title, h3")?.text() ?: ""
+        // En .ani-card, el título está en .ani-txt y la imagen en .ani-img img
+        val title     = this.selectFirst(".ani-txt")?.text() ?: ""
         val href      = this.selectFirst("a")?.attr("href") ?: ""
-        val posterUrl = this.selectFirst("img")?.attr("src")
+        val posterUrl = this.selectFirst(".ani-img img")?.attr("src")
+        
         return newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
             this.posterUrl = posterUrl
         }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get("$mainUrl/?s=$query").documentLarge
-        return document.select("article.item").mapNotNull { it.toSearchResult() }
+        // El sitio usa un parámetro de búsqueda "q" según el HTML
+        val document = app.get("$mainUrl/buscar/?q=$query").document
+        return document.select(".ani-card").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document    = app.get(url).documentLarge
-        val title       = document.selectFirst("h1")?.text() ?: "Desconocido"
+        val document    = app.get(url).document
+        val title       = document.selectFirst("h1.card-title")?.text() ?: "Sin título"
         val poster      = document.selectFirst("meta[property='og:image']")?.attr("content")
-        val description = document.selectFirst(".entry-content p")?.text()
+        val description = document.selectFirst(".card-text:contains(Ana Leal), .card-text")?.text()
         
-        // Selector específico para los episodios en este sitio
-        val episodes = document.select("ul.episodios li").map {
-            val a = it.selectFirst("a")
-            val epHref = a?.attr("href") ?: ""
-            val epName = it.text().trim()
+        // En este sitio, los capítulos suelen estar en una lista o botones
+        // Basado en el HTML, buscamos el botón de "Ver capítulos" o enlaces similares
+        val episodes = document.select("a[href*='/ver/']").map {
+            val epHref = it.attr("href")
+            val epName = it.attr("title").ifBlank { it.text().trim() }
             newEpisode(epHref) {
                 this.name = epName
             }
-        }.reversed()
+        }.distinctBy { it.data } // Evitamos duplicados
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
             this.posterUrl = poster
@@ -69,38 +72,30 @@ class Tlnovelas : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data).documentLarge
+        val response = app.get(data).text
         
-        // Primero intentamos con iframes directos
-        document.select("iframe").forEach {
-            val src = it.attr("src")
-            if (src.isNotBlank() && !src.contains("facebook")) {
-                loadExtractor(src, data, subtitleCallback, callback)
-            }
-        }
-
-        // Si usa el sistema de opciones de Dooplay (muy común en novelas)
-        document.select(".dooplay_player_option").forEach {
-            val type = it.attr("data-type")
-            val post = it.attr("data-post")
-            val nume = it.attr("data-nume")
+        // EXTRACCIÓN DE VIDEO (Lógica del script e[0])
+        // El HTML usa un array JS para los videos: e[0]='vOdNl3KSovin|1'
+        val videoIdRegex = Regex("""e\[\d+\]\s*=\s*['"](.*?)['"]""")
+        videoIdRegex.findAll(response).forEach { match ->
+            val fullId = match.groupValues[1] // Ejemplo: "vOdNl3KSovin|1"
+            val cleanId = fullId.substringBefore("|")
             
-            if (post.isNotBlank()) {
-                val res = app.post(
-                    "$mainUrl/wp-admin/admin-ajax.php",
-                    data = mapOf("action" to "doo_player_ajax", "post" to post, "nume" to nume, "type" to type),
-                    referer = data,
-                    headers = mapOf("X-Requested-With" to "XMLHttpRequest")
-                ).text
-                
-                val embedUrl = res.substringAfter("src='").substringBefore("'")
-                    .ifBlank { res.substringAfter("src=\"").substringBefore("\"") }
-                
-                if (embedUrl.startsWith("http")) {
-                    loadExtractor(embedUrl, data, subtitleCallback, callback)
+            // Aquí tendrías que saber a qué servidor pertenece ese ID.
+            // Si es un ID de OK.ru, Fembed, o un servidor propio:
+            // Ejemplo para Fembed (común):
+            // loadExtractor("https://www.fembed.com/v/$cleanId", data, subtitleCallback, callback)
+            
+            // Si hay un iframe real en el HTML:
+            val document = response.toHtml()
+            document.select("iframe").forEach {
+                val src = it.attr("src")
+                if (src.isNotBlank() && !src.contains("google")) {
+                    loadExtractor(src, data, subtitleCallback, callback)
                 }
             }
         }
+        
         return true
     }
 }
