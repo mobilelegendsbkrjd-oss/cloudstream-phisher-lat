@@ -18,10 +18,7 @@ class Novelas360 : MainAPI() {
     private suspend fun getDoc(url: String): Document {
         return app.get(
             url,
-            headers = mapOf(
-                "User-Agent" to chromeUA,
-                "Referer" to mainUrl
-            )
+            headers = mapOf("User-Agent" to chromeUA, "Referer" to mainUrl)
         ).document
     }
 
@@ -52,23 +49,23 @@ class Novelas360 : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val doc = getDoc(url)
-        val title = doc.selectFirst("h4 span")?.text() ?: "Novela"
+        val title = doc.selectFirst("h4 span, h1")?.text() ?: "Novela"
         val poster = fixUrl(doc.selectFirst("meta[property=og:image]")?.attr("content"))
         
         val allEpisodes = mutableListOf<Episode>()
-        
-        // PAGINACIÓN CORREGIDA
         var pageCount = 1
-        while (pageCount <= 20) { // Limitamos a 20 páginas para no saturar
+        
+        // PAGINACIÓN PARA CUKUR Y OTRAS LARGAS
+        while (pageCount <= 30) {
             val currentUrl = if (pageCount == 1) url else "${url.trimEnd('/')}/page/$pageCount/"
-            val pageDoc = if (pageCount == 1) doc else {
-                try { getDoc(currentUrl) } catch(e: Exception) { null }
-            }
+            val pageDoc = try { 
+                val d = getDoc(currentUrl)
+                if (d.select("div.item h3 a").isEmpty()) null else d
+            } catch(e: Exception) { null }
 
-            val items = pageDoc?.select("div.item h3 a") ?: emptyList()
-            if (items.isEmpty()) break
+            if (pageDoc == null) break
             
-            items.forEach { el ->
+            pageDoc.select("div.item h3 a").forEach { el ->
                 allEpisodes.add(newEpisode(el.attr("href")) {
                     this.name = el.text().trim()
                 })
@@ -91,36 +88,14 @@ class Novelas360 : MainAPI() {
         val document = getDoc(data)
 
         document.select("iframe").forEach { iframe ->
-            var src = fixUrl(iframe.attr("src")) ?: return@forEach
+            val src = fixUrl(iframe.attr("src")) ?: return@forEach
             
-            // Entramos al iframe para sacar el link real
-            val iframeHtml = app.get(src, headers = mapOf("Referer" to data, "User-Agent" to chromeUA)).text
-            
-            // Buscamos el video con Regex
-            Regex("""(https?.*?\.(?:m3u8|mp4).*?)["']""").findAll(iframeHtml).forEach { match ->
-                val videoUrl = match.groupValues[1].replace("\\/", "/")
-                
-                // USAMOS TU SINTAXIS ORIGINAL QUE SÍ COMPILA
-                callback(
-                    newExtractorLink(
-                        "Novelas360",
-                        "Servidor Directo",
-                        videoUrl
-                    ) {
-                        // Configuramos por dentro para evitar errores de parámetros
-                        this.quality = Qualities.Unknown.value
-                        // Si da error al asignar 'referer', lo quitamos, pero suele ser 'var'
-                        try {
-                            this.headers = mapOf(
-                                "User-Agent" to chromeUA,
-                                "Referer" to src,
-                                "Origin" to "https://novelas360.cyou"
-                            )
-                        } catch(e: Exception) { }
-                    }
-                )
+            // Si es el dominio .cyou, usamos nuestro extractor especial
+            if (src.contains("novelas360.cyou")) {
+                NovelasCyou().getUrl(src, data).forEach(callback)
+            } else {
+                loadExtractor(src, data, subtitleCallback, callback)
             }
-            loadExtractor(src, data, subtitleCallback, callback)
         }
         return true
     }
@@ -135,5 +110,39 @@ class Novelas360 : MainAPI() {
         return newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
             this.posterUrl = poster
         }
+    }
+}
+
+// --- EXTRACTOR PERSONALIZADO PARA MATAR EL ERROR IO ---
+class NovelasCyou : ExtractorApi() {
+    override val name = "Novelas360"
+    override val mainUrl = "https://novelas360.cyou"
+    override val requiresReferer = true
+
+    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink> {
+        val response = app.get(url, referer = referer).text
+        
+        // Buscamos el m3u8 escondido en el script
+        val m3u8 = Regex("""file:\s*"(https?.*?\.(?:m3u8|mp4).*?)"""").find(response)?.groupValues?.get(1)
+            ?: Regex("""source:\s*"(https?.*?\.(?:m3u8|mp4).*?)"""").find(response)?.groupValues?.get(1)
+
+        return if (m3u8 != null) {
+            listOf(
+                ExtractorLink(
+                    name,
+                    name,
+                    m3u8.replace("\\/", "/"),
+                    url,
+                    Qualities.Unknown.value,
+                    m3u8.contains("m3u8"),
+                    headers = mapOf(
+                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                        "Referer" to url,
+                        "Origin" to mainUrl,
+                        "Accept" to "*/*"
+                    )
+                )
+            )
+        } else emptyList()
     }
 }
