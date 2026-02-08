@@ -129,27 +129,33 @@ class Tlnovelas : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val html = app.get(data).text
+        val videoLinks = mutableListOf<String>()
 
         // JS arrays separados tipo e[0] = ...
-        Regex("""e\[\d+\]\s*=\s*['"](https?://[^'"]+)['"]""")
-            .findAll(html)
-            .forEach {
-                loadExtractor(it.groupValues[1].replace("\\/", "/"), data, subtitleCallback, callback)
-            }
+        Regex("""e\[\d+\]\s*=\s*['"](https?://[^'"]+)['"]""").findAll(html)
+            .forEach { videoLinks.add(it.groupValues[1].replace("\\/", "/")) }
 
         // JS arrays completos tipo var e = [...]
         Regex("""var\s+e\s*=\s*\[([^\]]+)\]""").findAll(html).forEach { match ->
-            val links = match.groupValues[1]
-                .split(",")
+            match.groupValues[1].split(",")
                 .map { it.trim().trim('\'', '"') }
-            links.forEach { loadExtractor(it, data, subtitleCallback, callback) }
+                .forEach { videoLinks.add(it) }
         }
 
         // Iframes estándar
         Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
             .findAll(html)
-            .forEach { loadExtractor(it.groupValues[1], data, subtitleCallback, callback) }
+            .forEach { videoLinks.add(it.groupValues[1]) }
 
-        return true
+        // Fallback automático: intenta cada link hasta que cargue correctamente
+        for (link in videoLinks) {
+            try {
+                loadExtractor(link, data, subtitleCallback, callback)
+            } catch (_: Exception) {
+                continue // si falla uno, pasa al siguiente
+            }
+        }
+
+        return videoLinks.isNotEmpty()
     }
 }
