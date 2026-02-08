@@ -93,22 +93,39 @@ class Tlnovelas : MainAPI() {
         }
     }
 
-    override suspend fun loadLinks(
+        override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // Obtenemos el HTML completo de la página del capítulo
         val response = app.get(data).text
         
-        // Regex para capturar las URLs en el array e[0], e[1]...
-        val videoUrlRegex = Regex("""e\[\d+\]\s*=\s*['"](https?://.*?)['"]""")
+        // 1. Buscamos todas las URLs dentro del array e[n] usando Regex
+        // Este Regex captura lo que esté entre comillas simples después de e[número]=
+        val videoUrlRegex = Regex("""e\[\d+\]\s*=\s*'(https?://[^']+)""")
         
+        // 2. Iteramos sobre todos los hallazgos (Opcion 1, 2, 3, 4, etc.)
         videoUrlRegex.findAll(response).forEach { match ->
-            val link = match.groupValues[1].replace("\\/", "/")
+            val link = match.groupValues[1]
+                .replace("\\/", "/") // Limpiamos posibles barras escapadas
+            
+            // 3. Cargamos el extractor correspondiente para cada link encontrado
+            // Esto habilitará servidores como DoodStream, Luluvideo (si están soportados), etc.
             loadExtractor(link, data, subtitleCallback, callback)
+        }
+
+        // 4. Búsqueda secundaria: Intentar capturar iframes por si acaso el sitio cambia
+        val document = Jsoup.parse(response)
+        document.select("iframe").forEach { iframe ->
+            val src = iframe.attr("src")
+            if (src.startsWith("http") && !src.contains("google")) {
+                loadExtractor(src, data, subtitleCallback, callback)
+            }
         }
 
         return true
     }
+
 }
