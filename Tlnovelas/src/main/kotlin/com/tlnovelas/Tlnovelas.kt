@@ -90,7 +90,7 @@ class Tlnovelas : MainAPI() {
         val poster =
             finalDoc.selectFirst("meta[property='og:image']")?.attr("content")
                 ?: finalDoc.selectFirst(".ani-img img")?.attr("src")
-                ?: document.selectFirst(".vk-poster img")?.attr("src") // fallback portada exterior
+                ?: document.selectFirst(".vk-poster img")?.attr("src")
 
         val description =
             finalDoc.selectFirst(".card-text, .ani-description")?.text()
@@ -123,22 +123,20 @@ class Tlnovelas : MainAPI() {
     }
 
     override suspend fun loadLinks(
-        override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val html = app.get(data).text
-        val videoLinks = mutableSetOf<String>() // Usamos Set para evitar duplicados
+        val videoLinks = mutableSetOf<String>()
 
-        // 1. Capturar asignaciones indexadas tipo: e[0]='https://...'
-        // Esta es la que requiere el nuevo HTML que proporcionaste
+        // 1. Regex para el nuevo formato indexado: e[0]='...'
         Regex("""e\[\d+\]\s*=\s*['"](https?://[^'"]+)['"]""").findAll(html).forEach {
             videoLinks.add(it.groupValues[1].replace("\\/", "/"))
         }
 
-        // 2. Capturar arrays de JS completos tipo: var e = ['link1', 'link2']
+        // 2. Regex para arrays JS estándar: var e = [...]
         Regex("""var\s+e\s*=\s*\[([^\]]+)\]""").findAll(html).forEach { match ->
             match.groupValues[1].split(",")
                 .map { it.trim().trim('\'', '"') }
@@ -146,21 +144,18 @@ class Tlnovelas : MainAPI() {
                 .forEach { videoLinks.add(it.replace("\\/", "/")) }
         }
 
-        // 3. Capturar Iframes estándar en el HTML
+        // 3. Regex para Iframes comunes
         Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
             .findAll(html)
             .forEach { videoLinks.add(it.groupValues[1]) }
 
-        // Procesar todos los links encontrados
+        // Ejecutar los extractores para cada link hallado
         for (link in videoLinks) {
             try {
                 loadExtractor(link, data, subtitleCallback, callback)
-            } catch (_: Exception) {
-                // Si un extractor falla, el bucle continúa con el siguiente
-            }
+            } catch (_: Exception) { }
         }
 
         return videoLinks.isNotEmpty()
     }
-
 }
