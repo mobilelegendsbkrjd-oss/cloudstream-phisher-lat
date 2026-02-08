@@ -1,27 +1,11 @@
-import com.lagradost.cloudstream3.gradle.CloudstreamExtension
+// Este es un ejemplo para tu build.gradle.kts en la carpeta Tlnovelas/
+version = 1
 
-// Aplicamos el plugin correctamente
-apply(plugin = "com.lagradost.cloudstream3.gradle")
-
-configure<CloudstreamExtension> {
-    // Usamos asignación directa o métodos según tu versión del plugin
-    name = "Tele-Libre"
-    description = "Extensión para ver televisión en vivo de Argentina y el mundo"
-    language = "es"
-    authors = listOf("bkrjd")
-    
-    // Status 1: Producción/Funcional
+cloudstream {
+    description = "Extension para ver television de tele-libre.fans"
+    language    = "mx"
+    authors = listOf("bkrjd") //e
     status = 1
-    
-    // Lista de tipos de contenido
-    tvTypes = listOf("LiveStream")
-    
-    // URL del icono (basado en el mapa técnico)
+    tvTypes = listOf("TvSeries")
     iconUrl = "https://tele-libre.fans/img/logo.png"
-}
-
-dependencies {
-    // Implementación estándar de Kotlin y Jsoup para el scrapeo
-    implementation(kotlin("stdlib"))
-    implementation("org.jsoup:jsoup:1.15.3")
 }
