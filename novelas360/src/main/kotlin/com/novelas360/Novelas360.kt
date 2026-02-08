@@ -13,7 +13,6 @@ class Novelas360 : MainAPI() {
     override var lang = "es"
     override val supportedTypes = setOf(TvType.TvSeries)
 
-    // Cambiamos el User-Agent a uno de Chrome real para evitar el Error IO
     private val chromeUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 
     private suspend fun getDoc(url: String): Document {
@@ -31,17 +30,10 @@ class Novelas360 : MainAPI() {
         return if (url.startsWith("//")) "https:$url" else url
     }
 
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = getDoc("$mainUrl/telenovelas/mexico/")
         val items = document.select("div.tabcontent#Todos > a").mapNotNull { it.toSearchResult() }
-
-        return newHomePageResponse(
-            listOf(HomePageList("Telenovelas México", items)),
-            false
-        )
+        return newHomePageResponse(listOf(HomePageList("Telenovelas México", items)), false)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -59,24 +51,38 @@ class Novelas360 : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = getDoc(url)
-        val title = document.selectFirst("h4 span")?.text() ?: "Novela"
-        val plot = document.selectFirst("meta[name=description]")?.attr("content")
-        val poster = fixUrl(document.selectFirst("meta[property=og:image]")?.attr("content"))
-
-        // Mantenemos tu lógica de episodios
-        val episodes = document.select("div.item h3 a").mapIndexedNotNull { index, el ->
-            val epUrl = el.attr("href")
-            if (epUrl.isBlank()) return@mapIndexedNotNull null
-            newEpisode(epUrl) {
-                this.name = el.text().trim()
-                this.episode = index + 1
+        val doc = getDoc(url)
+        val title = doc.selectFirst("h4 span, h1")?.text() ?: "Novela"
+        val poster = fixUrl(doc.selectFirst("meta[property=og:image]")?.attr("content"))
+        
+        val allEpisodes = mutableListOf<Episode>()
+        
+        // Paginación de capítulos
+        var currentUrl: String? = url
+        var pageCount = 1
+        
+        while (currentUrl != null && pageCount <= 40) {
+            val pageDoc = if (pageCount == 1) doc else getDoc(currentUrl)
+            val items = pageDoc.select("div.item h3 a")
+            
+            if (items.isEmpty()) break
+            
+            items.forEach { el ->
+                allEpisodes.add(newEpisode(el.attr("href")) {
+                    this.name = el.text().trim()
+                })
             }
+
+            // Buscar link de "Siguiente" o construir el siguiente path
+            pageCount++
+            currentUrl = "${url.removeSuffix("/")}/page/$pageCount/"
+            
+            // Si la página actual no tiene resultados, el siguiente getDoc fallará o traerá vacío y el loop romperá
         }
 
-        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-            this.plot = plot
+        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, allEpisodes.distinctBy { it.data }.reversed()) {
             this.posterUrl = poster
+            this.plot = doc.selectFirst("meta[name=description]")?.attr("content")
         }
     }
 
@@ -89,28 +95,41 @@ class Novelas360 : MainAPI() {
         val document = getDoc(data)
 
         document.select("iframe").forEach { iframe ->
-            var src = iframe.attr("src")
-            if (src.isBlank()) return@forEach
-            if (src.startsWith("//")) src = "https:$src"
-
-            // 1. Intentar con extractores oficiales (estos ya manejan sus propios headers)
-            val loaded = loadExtractor(src, data, subtitleCallback, callback)
+            val src = fixUrl(iframe.attr("src")) ?: return@forEach
             
-            // 2. Si no es un extractor oficial, aplicar el fix de Referer/UA para evitar Error IO
-            if (!loaded) {
-                val iframeHtml = app.get(src, headers = mapOf("Referer" to data, "User-Agent" to chromeUA)).text
-                Regex("""https?:\/\/[^\s'"]+\.(mp4|m3u8)""").findAll(iframeHtml).forEach {
-                    callback(
-                        newExtractorLink(
-                            source = "Novelas360",
-                            name = "Servidor",
-                            url = it.value
-                        ).apply {
-                            this.referer = src // Esto es VITAL para quitar el Error IO
-                        }
-                    )
-                }
+            // Bypass para novelas360.cyou y similares
+            val iframeRes = app.get(src, headers = mapOf(
+                "Referer" to data,
+                "User-Agent" to chromeUA,
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+            ))
+
+            val iframeHtml = iframeRes.text
+            
+            // Buscamos archivos de video reales dentro del embed
+            val videoRegex = Regex("""(https?.*?\.m3u8.*?)["']""")
+            videoRegex.findAll(iframeHtml).forEach { match ->
+                val videoUrl = match.groupValues[1].replace("\\/", "/")
+                callback(
+                    newExtractorLink(
+                        "Novelas360",
+                        "Servidor HD",
+                        videoUrl,
+                        src,
+                        Qualities.Unknown.value,
+                        true
+                    ).apply {
+                        this.headers = mapOf(
+                            "User-Agent" to chromeUA,
+                            "Referer" to src,
+                            "Origin" to "https://novelas360.cyou"
+                        )
+                    }
+                )
             }
+            
+            // También intentamos con extractores conocidos por si acaso
+            loadExtractor(src, data, subtitleCallback, callback)
         }
         return true
     }
