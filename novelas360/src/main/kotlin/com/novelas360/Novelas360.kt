@@ -58,7 +58,7 @@ class Novelas360 : MainAPI() {
         val allEpisodes = mutableListOf<Episode>()
         var pageCount = 1
         
-        while (pageCount <= 30) {
+        while (pageCount <= 35) {
             val currentUrl = if (pageCount == 1) url else "${url.removeSuffix("/")}/page/$pageCount/"
             val pageDoc = try { getDoc(currentUrl) } catch(e: Exception) { null }
 
@@ -95,20 +95,15 @@ class Novelas360 : MainAPI() {
             videoRegex.findAll(iframeHtml).forEach { match ->
                 val videoUrl = match.groupValues[1].replace("\\/", "/")
                 
-                // USANDO UNA FORMA QUE NO REQUIERE REASIGNAR 'VAL'
+                // USANDO LA FUNCIÓN RECOMENDADA CON PARÁMETROS NOMBRADOS PARA EVITAR MISMATCH
                 callback(
-                    ExtractorLink(
+                    newExtractorLink(
                         source = "Novelas360",
                         name = "Servidor Directo",
                         url = videoUrl,
                         referer = src,
                         quality = Qualities.Unknown.value,
-                        isM3u8 = videoUrl.contains("m3u8"),
-                        headers = mapOf(
-                            "User-Agent" to chromeUA,
-                            "Referer" to src,
-                            "Origin" to "https://novelas360.cyou"
-                        )
+                        isM3u8 = videoUrl.contains("m3u8")
                     )
                 )
             }
