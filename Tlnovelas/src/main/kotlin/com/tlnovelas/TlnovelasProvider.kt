@@ -1,4 +1,3 @@
-
 package com.tlnovelas
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
