@@ -7,38 +7,38 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
 
 // =============================================================================
-// EXTRACTOR: Se encarga de limpiar el JS y encontrar los servidores
+// EXTRACTOR PERSONALIZADO PARA EL JS DE TLNOVELAS
 // =============================================================================
+
 class TlnovelasJS : ExtractorApi() {
     override val name = "Tlnovelas JS"
     override val mainUrl = "https://ww2.tlnovelas.net"
     override val requiresReferer = true
 
+    // Se cambió el tipo de retorno de List<ExtractorLink> a Unit
     override suspend fun getUrl(
         url: String,
         referer: String?,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ): List<ExtractorLink> {
+    ) {
         val response = app.get(url, referer = referer).text
         
-        // Buscamos los links en el array de JS e[0]='...', e[1]='...'
+        // Buscamos las URLs dentro del array e[0], e[1]...
         val links = Regex("""e\[\d+\]\s*=\s*['"](https?://[^'"]+)['"]""").findAll(response)
             .map { it.groupValues[1].replace("\\/", "/") }
             .toList()
 
         links.forEach { link ->
-            // Enviamos cada link a los extractores base de Cloudstream
             loadExtractor(link, url, subtitleCallback, callback)
         }
-        
-        return listOf() 
     }
 }
 
 // =============================================================================
-// MAIN PROVIDER: La lógica de navegación y búsqueda
+// PROVEEDOR PRINCIPAL
 // =============================================================================
+
 class Tlnovelas : MainAPI() {
 
     override var mainUrl = "https://ww2.tlnovelas.net"
@@ -119,11 +119,11 @@ class Tlnovelas : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // 1. Ejecutamos el extractor personalizado para el JS
+        // 1. Ejecutar extractor personalizado
         val jsExtractor = TlnovelasJS()
         jsExtractor.getUrl(data, data, subtitleCallback, callback)
 
-        // 2. Buscamos iframes genéricos (por si acaso)
+        // 2. Buscar iframes (limpiando links de basura/ads)
         val html = app.get(data).text
         Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
             .findAll(html).forEach { 
