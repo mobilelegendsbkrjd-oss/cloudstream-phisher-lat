@@ -66,7 +66,7 @@ class Tlnovelas : MainAPI() {
         }
     }
 
-    override suspend fun loadLinks(
+        override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -74,28 +74,28 @@ class Tlnovelas : MainAPI() {
     ): Boolean {
         val response = app.get(data).text
         
-        // EXTRACCIÓN DE VIDEO (Lógica del script e[0])
-        // El HTML usa un array JS para los videos: e[0]='vOdNl3KSovin|1'
+        // 1. Extraer IDs de video del script
         val videoIdRegex = Regex("""e\[\d+\]\s*=\s*['"](.*?)['"]""")
         videoIdRegex.findAll(response).forEach { match ->
-            val fullId = match.groupValues[1] // Ejemplo: "vOdNl3KSovin|1"
+            val fullId = match.groupValues[1]
             val cleanId = fullId.substringBefore("|")
             
-            // Aquí tendrías que saber a qué servidor pertenece ese ID.
-            // Si es un ID de OK.ru, Fembed, o un servidor propio:
-            // Ejemplo para Fembed (común):
-            // loadExtractor("https://www.fembed.com/v/$cleanId", data, subtitleCallback, callback)
-            
-            // Si hay un iframe real en el HTML:
-            val document = response.toHtml()
-            document.select("iframe").forEach {
-                val src = it.attr("src")
-                if (src.isNotBlank() && !src.contains("google")) {
-                    loadExtractor(src, data, subtitleCallback, callback)
-                }
+            // Ejemplo: Si identificas que el servidor es Fembed o similar,
+            // aquí llamarías a su extractor. Por ahora buscamos iframes.
+        }
+
+        // 2. Corregido: Convertir String a Documento HTML usando Jsoup.parse
+        val document = org.jsoup.Jsoup.parse(response)
+        
+        // 3. Corregido: Usar un ciclo 'for' para permitir funciones suspend (loadExtractor)
+        val iframes = document.select("iframe")
+        for (iframe in iframes) {
+            val src = iframe.attr("src")
+            if (src.isNotBlank() && !src.contains("google") && !src.contains("facebook")) {
+                // Ahora sí permite llamar a loadExtractor aquí
+                loadExtractor(src, data, subtitleCallback, callback)
             }
         }
         
         return true
     }
-}
