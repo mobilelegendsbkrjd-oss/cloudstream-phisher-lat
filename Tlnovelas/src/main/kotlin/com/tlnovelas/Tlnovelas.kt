@@ -73,7 +73,7 @@ class Tlnovelas : MainAPI() {
         }
     }
 
-    override suspend fun loadLinks(
+        override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -82,15 +82,33 @@ class Tlnovelas : MainAPI() {
         val response = app.get(data).text
         val document = Jsoup.parse(response)
         
-        // Extraer iframes de servidores externos
+        // 1. Intentar extraer el ID del script e[0]='...'
+        val videoIdRegex = Regex("""e\[\d+\]\s*=\s*['"](.*?)['"]""")
+        videoIdRegex.findAll(response).forEach { match ->
+            val fullId = match.groupValues[1]
+            if (fullId.contains("|")) {
+                val cleanId = fullId.substringBefore("|")
+                
+                // Intentamos cargar el reproductor interno del sitio con ese ID
+                // Nota: Esta URL es una conjetura basada en sitios similares de este template.
+                // Si tienes la URL del iframe que sale en tu PC al dar "Play", ponla aquí.
+                val internalUrl = "$mainUrl/tmp/reproductor.php?h=$cleanId"
+                loadExtractor(internalUrl, data, subtitleCallback, callback)
+            }
+        }
+
+        // 2. Buscar iframes ocultos (en caso de que ya estén renderizados)
         val iframes = document.select("iframe")
         for (iframe in iframes) {
-            val src = iframe.attr("src")
+            var src = iframe.attr("src")
+            if (src.isBlank()) src = iframe.attr("data-src") // A veces usan lazy load
+            
             if (src.isNotBlank() && !src.contains("google") && !src.contains("facebook")) {
-                loadExtractor(src, data, subtitleCallback, callback)
+                // Si la URL es relativa, la hacemos absoluta
+                val absoluteUrl = if (src.startsWith("/")) "$mainUrl$src" else src
+                loadExtractor(absoluteUrl, data, subtitleCallback, callback)
             }
         }
         
         return true
     }
-}
