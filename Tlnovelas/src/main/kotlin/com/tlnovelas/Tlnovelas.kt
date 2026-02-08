@@ -19,15 +19,12 @@ class Tlnovelas : MainAPI() {
         "gratis/telenovelas/" to "Ver Telenovelas"
     )
 
+    // --- MAIN PAGE ---
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-
-        val url =
-            if (page <= 1) "$mainUrl/${request.data}"
-            else "$mainUrl/${request.data}/page/$page"
-
+        val url = if (page <= 1) "$mainUrl/${request.data}" else "$mainUrl/${request.data}/page/$page"
         val document = app.get(url).document
         val home = document
             .select(".vk-poster, .p-content, .ani-card, .ani-txt")
@@ -38,18 +35,14 @@ class Tlnovelas : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse {
-        var title =
-            selectFirst(".vk-info p, .p-title, .ani-txt")?.text()
-                ?: selectFirst("a")?.attr("title")
-                ?: ""
-
+        var title = selectFirst(".vk-info p, .p-title, .ani-txt")?.text()
+            ?: selectFirst("a")?.attr("title")
+            ?: ""
         var href = selectFirst("a")?.attr("href") ?: ""
         val poster = selectFirst("img")?.attr("src")
 
         if (href.contains("/ver/")) {
-            title = title
-                .split(Regex("(?i)Capitulo|Capítulo"))[0]
-                .trim()
+            title = title.split(Regex("(?i)Capitulo|Capítulo"))[0].trim()
 
             val slug = href
                 .removeSuffix("/")
@@ -65,93 +58,79 @@ class Tlnovelas : MainAPI() {
         }
     }
 
-    override suspend fun load(url: String): LoadResponse {
-
+    // --- SEARCH ---
+    override suspend fun search(query: String): List<SearchResponse> {
+        val url = "$mainUrl/buscar/?q=${query.replace(" ", "+")}"
         val document = app.get(url).document
 
-        val novelaLink =
-            document.selectFirst("a[href*='/novela/']")?.attr("href")
+        return document.select(".vk-new-poster .vk-poster a").mapNotNull { element ->
+            val title = element.selectFirst(".vk-info p")?.text() ?: element.attr("title")
+            val href = element.attr("href")
+            val poster = element.selectFirst("img")?.attr("src")
 
-        val finalDoc =
-            if (url.contains("/ver/") && novelaLink != null)
-                app.get(novelaLink).document
-            else document
+            newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+                posterUrl = poster
+            }
+        }
+    }
 
-        val title =
-            finalDoc.selectFirst("h1.card-title, .vk-title-main, h1")
-                ?.text()
-                ?: "Telenovela"
+    // --- LOAD TV SERIES ---
+    override suspend fun load(url: String): LoadResponse {
+        val document = app.get(url).document
+        val novelaLink = document.selectFirst("a[href*='/novela/']")?.attr("href")
+        val finalDoc = if (url.contains("/ver/") && novelaLink != null) app.get(novelaLink).document else document
 
-        val poster =
-            finalDoc.selectFirst("meta[property='og:image']")
-                ?.attr("content")
-                ?: finalDoc.selectFirst(".ani-img img")?.attr("src")
+        val title = finalDoc.selectFirst("h1.card-title, .vk-title-main, h1")
+            ?.text()
+            ?.replace(Regex("(?i)Capitulos de|Ver"), "")
+            ?.trim() ?: "Telenovela"
 
-        val description =
-            finalDoc.selectFirst(".card-text, .ani-description")?.text()
+        val poster = finalDoc.selectFirst("meta[property='og:image']")?.attr("content")
+            ?: finalDoc.selectFirst(".ani-img img")?.attr("src")
 
-        val episodes =
-            finalDoc.select("a[href*='/ver/']")
-                .map {
-                    val epUrl = it.attr("href")
-                    val epName = it.text()
-                        .replace(title, "", true)
-                        .replace(Regex("(?i)Ver"), "")
-                        .trim()
+        val description = finalDoc.selectFirst(".card-text, .ani-description")?.text()
 
-                    newEpisode(epUrl) {
-                        name =
-                            if (epName.isEmpty()) "Capítulo"
-                            else "Capítulo $epName"
-                    }
-                }
-                .distinctBy { it.data }
-                .reversed() // mantiene compatibilidad pero ordena
+        val episodes = finalDoc.select("a[href*='/ver/']").map {
+            val epUrl = it.attr("href")
+            val epName = it.text()
+                .replace(title, "", true)
+                .replace(Regex("(?i)Ver|Capitulo|Capítulo"), "")
+                .trim()
 
-        return newTvSeriesLoadResponse(
-            title,
-            url,
-            TvType.TvSeries,
-            episodes
-        ) {
+            newEpisode(epUrl) {
+                name = if (epName.isEmpty()) "Capítulo" else "Capítulo $epName"
+            }
+        }.distinctBy { it.data }
+         .reversed()
+
+        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
             posterUrl = poster
             plot = description
         }
     }
 
+    // --- LOAD LINKS ---
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-
         val html = app.get(data).text
 
-        // JS players
+        // JS players (Playerwish, Byse, etc)
         Regex("""e\[\d+\]\s*=\s*['"](https?://[^'"]+)['"]""")
             .findAll(html)
             .forEach {
-                loadExtractor(
-                    it.groupValues[1].replace("\\/", "/"),
-                    data,
-                    subtitleCallback,
-                    callback
-                )
+                loadExtractor(it.groupValues[1].replace("\\/", "/"), data, subtitleCallback, callback)
             }
 
-        // Iframes estándar
-        Regex(
-            """<iframe[^>]+src=["'](https?://[^"']+)["']""",
-            RegexOption.IGNORE_CASE
-        ).findAll(html).forEach {
-            loadExtractor(
-                it.groupValues[1],
-                data,
-                subtitleCallback,
-                callback
-            )
-        }
+        // Iframes estándar (Streamwish, Vidhide, Lulu, Filemoon, Dood, Mixdrop)
+        Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
+            .findAll(html)
+            .forEach {
+                loadExtractor(it.groupValues[1], data, subtitleCallback, callback)
+            }
 
         return true
     }
