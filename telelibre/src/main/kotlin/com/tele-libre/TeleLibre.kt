@@ -35,7 +35,7 @@ class TeleLibre : MainAPI() {
     private fun Element.toSearchResult(): SearchResponse {
         val title = select("img").attr("alt").ifEmpty { this.text() }.trim()
         val href = attr("href")
-        // fixUrl ayuda a que si el link es "/img/logo.png" se convierta en "https://tele-libre.fans/img/logo.png"
+        // fixUrl para asegurar que la imagen cargue correctamente
         val poster = fixUrl(select("img").attr("src"))
 
         return newTvSeriesSearchResponse(title, fixUrl(href), TvType.TvSeries) { 
@@ -52,9 +52,19 @@ class TeleLibre : MainAPI() {
         val poster = fixUrl(document.selectFirst(".logoCanal img")?.attr("src") ?: "")
         val description = document.selectFirst(".card-text")?.text()
 
-        val episodes = listOf(
-            newEpisode(url) { name = "Señal en Vivo" }
-        )
+        // Agregamos todas las opciones de "embed" que aparezcan en el HTML
+        val episodes = document.select("a.btn.btn-md[href*='embed']").map {
+            newEpisode(fixUrl(it.attr("href"))) {
+                this.name = it.text() // "Opción 1", "Opción 2", etc.
+            }
+        }.toMutableList()
+
+        // Si no hay botones de opción, intentamos con el iframe principal
+        if (episodes.isEmpty()) {
+            document.selectFirst("iframe#iframe")?.attr("src")?.let {
+                episodes.add(newEpisode(fixUrl(it)) { this.name = "Señal Principal" })
+            }
+        }
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
             this.posterUrl = poster
@@ -68,32 +78,35 @@ class TeleLibre : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // 'data' ahora es la URL de un embed.php o similar
         val response = app.get(data).text
         val videoLinks = mutableSetOf<String>()
 
-        // Extraer links Base64
+        // 1. Buscar el Base64 que vimos antes (por si acaso)
         val regex = Regex("""(?:embed|r)\s*=\s*['"]([^'"]+)['"]""")
         regex.findAll(response).forEach { match ->
-            val encodedData = match.groupValues[1]
             try {
-                val decodedUrl = String(Base64.decode(encodedData, Base64.DEFAULT), StandardCharsets.UTF_8)
-                if (decodedUrl.startsWith("http")) {
-                    videoLinks.add(decodedUrl)
-                }
+                val decodedUrl = String(Base64.decode(match.groupValues[1], Base64.DEFAULT), StandardCharsets.UTF_8)
+                if (decodedUrl.startsWith("http")) videoLinks.add(decodedUrl)
             } catch (_: Exception) {}
         }
 
-        // Extraer Iframes
+        // 2. Buscar enlaces directos a reproductores conocidos o .m3u8 en el código del iframe
+        Regex("""https?://[^\s'"]+\.(?:m3u8|mp4)""").findAll(response).forEach {
+            videoLinks.add(it.value)
+        }
+
+        // 3. Buscar otros iframes dentro del iframe (anidación)
         Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE).findAll(response).forEach {
             val link = it.groupValues[1]
             if (!link.contains("google") && !link.contains("adskeeper")) {
-                videoLinks.add(link)
+                videoLinks.add(fixUrl(link))
             }
         }
 
         videoLinks.forEach { link ->
-            // AQUÍ ESTÁ EL TRUCO: Le pasamos 'data' (la URL del canal) como Referer
-            loadExtractor(link, data, subtitleCallback, callback)
+            // Cargamos el extractor enviando el 'mainUrl' como Referer para saltar bloqueos
+            loadExtractor(link, mainUrl, subtitleCallback, callback)
         }
 
         return videoLinks.isNotEmpty()
