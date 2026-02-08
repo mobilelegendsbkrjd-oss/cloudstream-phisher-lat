@@ -102,16 +102,19 @@ class Novelas360 : MainAPI() {
                 val iframeHtml = app.get(src, headers = mapOf("Referer" to data, "User-Agent" to userAgent)).text
                 Regex("""https?:\/\/[^\s'"]+\.(mp4|m3u8)[^\s'"]*""").findAll(iframeHtml).forEach {
                     val videoUrl = it.value
-                    // USANDO LA SINTAXIS CORRECTA PARA NEWEXTRACTORLINK
+                    
+                    // SOLUCIÓN DEFINITIVA PARA EL ERROR DE COMPILACIÓN:
+                    // Usamos la función con el bloque de inicialización {} sin pasar argumentos extra
                     callback(
                         newExtractorLink(
-                            "Novelas360",
-                            "Servidor Externo",
-                            videoUrl,
-                            src,
-                            Qualities.Unknown.value,
-                            videoUrl.contains("m3u8")
-                        )
+                            source = "Novelas360",
+                            name = "Servidor Externo",
+                            url = videoUrl
+                        ).apply {
+                            this.referer = src
+                            this.quality = Qualities.Unknown.value
+                            this.isM3u8 = videoUrl.contains("m3u8")
+                        }
                     )
                 }
             }
