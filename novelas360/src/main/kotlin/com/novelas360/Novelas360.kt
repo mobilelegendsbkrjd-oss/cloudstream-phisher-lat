@@ -13,7 +13,6 @@ class Novelas360 : MainAPI() {
     override var lang = "es"
     override val supportedTypes = setOf(TvType.TvSeries)
 
-    // User-Agent actualizado para evitar bloqueos e IO Errors
     private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
     private suspend fun getDoc(url: String): Document {
@@ -21,8 +20,7 @@ class Novelas360 : MainAPI() {
             url,
             headers = mapOf(
                 "User-Agent" to userAgent,
-                "Referer" to mainUrl,
-                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+                "Referer" to mainUrl
             )
         ).document
     }
@@ -37,7 +35,6 @@ class Novelas360 : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
         val document = getDoc("$mainUrl/telenovelas/mexico/")
-        // Selector original que confirmaste que funciona
         val items = document.select("div.tabcontent#Todos > a").mapNotNull { it.toSearchResult() }
 
         return newHomePageResponse(
@@ -70,10 +67,9 @@ class Novelas360 : MainAPI() {
         val plot = document.selectFirst(".entry-content p, meta[name=description]")?.text()
         val poster = fixUrl(document.selectFirst("meta[property=og:image]")?.attr("content"))
 
-        // BUSQUEDA DE EPISODIOS MEJORADA
-        // Buscamos en el área de contenido y en los items de lista
+        // Seccion de episodios mejorada para capturar listas largas
         val episodes = document.select("div.item h3 a, .entry-content a[href*='/video/'], .entry-content a[href*='capitulo']")
-            .distinctBy { it.attr("href") } // Evitar duplicados
+            .distinctBy { it.attr("href") }
             .mapIndexedNotNull { index, el ->
                 val epUrl = el.attr("href")
                 if (epUrl.isBlank()) return@mapIndexedNotNull null
@@ -82,7 +78,7 @@ class Novelas360 : MainAPI() {
                     this.name = el.text().trim().ifBlank { "Capítulo ${index + 1}" }
                     this.episode = index + 1
                 }
-            }.sortedBy { it.episode } // Intentar ordenar por número si es posible
+            }.sortedByDescending { it.episode } // Normalmente las novelas se ven mejor de reciente a antiguo
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
             this.plot = plot
@@ -98,23 +94,25 @@ class Novelas360 : MainAPI() {
     ): Boolean {
         val document = getDoc(data)
 
-        // Buscamos todos los iframes
         document.select("iframe").forEach { iframe ->
             val src = fixUrl(iframe.attr("src")) ?: return@forEach
             
-            // Los extractores nativos son más estables para evitar Error IO
-            if (!loadExtractor(src, data, subtitleCallback, callback)) {
-                // Si no es un extractor conocido, intentamos jalar el MP4/M3U8 manualmente
+            // Primero intentamos con los extractores automáticos
+            val loaded = loadExtractor(src, data, subtitleCallback, callback)
+            
+            if (!loaded) {
+                // Si no es un extractor conocido, buscamos el link de video manualmente
                 val iframeHtml = app.get(src, headers = mapOf("Referer" to data, "User-Agent" to userAgent)).text
                 Regex("""https?:\/\/[^\s'"]+\.(mp4|m3u8)[^\s'"]*""").findAll(iframeHtml).forEach {
+                    val videoUrl = it.value
                     callback(
-                        newExtractorLink(
+                        ExtractorLink(
                             source = "Novelas360",
                             name = "Servidor Externo",
-                            url = it.value,
+                            url = videoUrl,
                             referer = src,
                             quality = Qualities.Unknown.value,
-                            isM3u8 = it.value.contains("m3u8")
+                            isM3u8 = videoUrl.contains("m3u8")
                         )
                     )
                 }
