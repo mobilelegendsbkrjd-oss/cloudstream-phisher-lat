@@ -24,15 +24,32 @@ class Tlnovelas : MainAPI() {
         val document = app.get(url).document
         val home = document.select(".vk-poster, .p-content, .ani-card").mapNotNull { 
             it.toSearchResult() 
-        }
+        }.distinctBy { it.url } // Evita duplicados en la Home
+        
         return newHomePageResponse(request.name, home, hasNext = true)
     }
 
     private fun Element.toSearchResult(): SearchResponse {
-        val title = this.selectFirst(".vk-info p, .p-title, .ani-txt")?.text() 
+        var title = this.selectFirst(".vk-info p, .p-title, .ani-txt")?.text() 
             ?: this.selectFirst("a")?.attr("title") 
             ?: ""
-        val href = this.selectFirst("a")?.attr("href") ?: ""
+        
+        var href = this.selectFirst("a")?.attr("href") ?: ""
+        
+        // --- LÓGICA DE REFINAMIENTO ---
+        if (href.contains("/ver/")) {
+            // 1. Limpiar título: de "Amanecer Capítulo 69" a "Amanecer"
+            title = title.split("Capítulo")[0].split("Capitulo")[0].trim()
+            
+            // 2. Normalizar URL: Convertir link de episodio a link de novela
+            // Ejemplo: .../ver/amanecer-capitulo-69/ -> .../novela/amanecer/
+            val slug = href.removeSuffix("/").substringAfterLast("/")
+                .replace(Regex("-capitulo-\\d+"), "")
+                .replace(Regex("-capítulo-\\d+"), "")
+            
+            href = "$mainUrl/novela/$slug/"
+        }
+        
         val posterUrl = this.selectFirst("img")?.attr("src")
         
         return newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
@@ -40,32 +57,43 @@ class Tlnovelas : MainAPI() {
         }
     }
 
-    override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get("$mainUrl/buscar/?q=$query").document
-        return document.select(".vk-poster, .p-content, .ani-card").mapNotNull { it.toSearchResult() }
-    }
-
     override suspend fun load(url: String): LoadResponse {
+        // Si por alguna razón el slug normalizado falla, intentamos cargar la página
         val document = app.get(url).document
-        val title = document.selectFirst("h1.card-title, .vk-title-main")?.text() ?: "Sin título"
-        val poster = document.selectFirst("meta[property='og:image']")?.attr("content")
-        val description = document.selectFirst(".card-text")?.text()
         
-        val episodes = document.select("a[href*='/ver/']").map {
+        // Si caímos en una página de "ver capítulo" por error, buscamos el link a la novela
+        val realUrl = if (url.contains("/ver/")) {
+            document.selectFirst("a[href*='/novela/']")?.attr("href") ?: url
+        } else url
+        
+        val finalDoc = if (realUrl != url) app.get(realUrl).document else document
+
+        val title = finalDoc.selectFirst("h1.card-title, .vk-title-main")?.text() 
+            ?.replace("Capitulos de", "")?.trim() ?: "Sin título"
+            
+        val poster = finalDoc.selectFirst("meta[property='og:image']")?.attr("content")
+        val description = finalDoc.selectFirst(".card-text")?.text()
+        
+        // Obtener lista completa de episodios desde la página de la novela
+        val episodes = finalDoc.select("a[href*='/ver/']").map {
             val epHref = it.attr("href")
             val epName = it.attr("title").ifBlank { it.text().trim() }
+                .replace(title, "", ignoreCase = true)
+                .replace("Ver", "", ignoreCase = true)
+                .trim()
+                
             newEpisode(epHref) {
-                this.name = epName
+                this.name = epName.ifBlank { "Capítulo" }
             }
         }.distinctBy { it.data }.reversed()
 
-        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+        return newTvSeriesLoadResponse(title, realUrl, TvType.TvSeries, episodes) {
             this.posterUrl = poster
             this.plot = description
         }
     }
 
-        override suspend fun loadLinks(
+    override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -73,35 +101,14 @@ class Tlnovelas : MainAPI() {
     ): Boolean {
         val response = app.get(data).text
         
-        // 1. Regex mejorado para capturar URLs completas dentro del array e[x]
-        // Busca patrones como e[0]='https://...'
+        // Regex para capturar las URLs en el array e[0], e[1]...
         val videoUrlRegex = Regex("""e\[\d+\]\s*=\s*['"](https?://.*?)['"]""")
         
-        val foundLinks = videoUrlRegex.findAll(response).map { it.groupValues[1] }.toList()
-        
-        if (foundLinks.isEmpty()) {
-            // Si el regex de arriba falla, intentamos una búsqueda más agresiva de enlaces de video
-            val genericUrlRegex = Regex("""https?://[\w\d]+\.[\w\d]+(?:/[\w\d]+)*/e/[\w\d]+""")
-            genericUrlRegex.findAll(response).forEach { match ->
-                loadExtractor(match.value, data, subtitleCallback, callback)
-            }
-        } else {
-            for (link in foundLinks) {
-                // Limpiamos el link por si tiene carácteres de escape y cargamos el extractor
-                val cleanLink = link.replace("\\/", "/")
-                loadExtractor(cleanLink, data, subtitleCallback, callback)
-            }
+        videoUrlRegex.findAll(response).forEach { match ->
+            val link = match.groupValues[1].replace("\\/", "/")
+            loadExtractor(link, data, subtitleCallback, callback)
         }
 
-        // 2. Por si acaso, revisamos iframes (aunque el script parece ser el método principal)
-        val document = Jsoup.parse(response)
-        document.select("iframe").forEach { iframe ->
-            val src = iframe.attr("src")
-            if (src.isNotBlank() && !src.contains("google") && !src.contains("facebook")) {
-                loadExtractor(src, data, subtitleCallback, callback)
-            }
-        }
-        
         return true
     }
 }
