@@ -3,7 +3,6 @@ package com.novelas360
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
-import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
 class Novelas360 : MainAPI() {
@@ -15,9 +14,9 @@ class Novelas360 : MainAPI() {
     override val supportedTypes = setOf(TvType.TvSeries)
 
     // ==============================
-    // SAFE HTTP (NUNCA CRASHEA)
+    // SAFE REQUEST
     // ==============================
-    private suspend fun safeDoc(url: String): Document? =
+    private suspend fun safeDoc(url: String) =
         runCatching {
             app.get(
                 url,
@@ -33,7 +32,7 @@ class Novelas360 : MainAPI() {
         else if (url.startsWith("//")) "https:$url" else url
 
     // ==============================
-    // MAIN PAGE (NO ROMPE)
+    // MAIN PAGE (MÉXICO ONLY)
     // ==============================
     override suspend fun getMainPage(
         page: Int,
@@ -43,38 +42,15 @@ class Novelas360 : MainAPI() {
         val document = safeDoc("$mainUrl/telenovelas/mexico/")
             ?: return newHomePageResponse(emptyList(), false)
 
-        val tabs = listOf(
-            "Telenovelas México" to "Mexico",
-            "Telenovelas Turcas" to "Turcas",
-            "Telenovelas Colombianas" to "Colombia",
-            "Telenovelas Brasileñas" to "Brasil",
-            "Telenovelas Argentinas" to "Argentina"
+        val items = document
+            .select("div.tabcontent#Mexico a")
+            .mapNotNull { it.toSearchResult() }
+
+        val home = listOf(
+            HomePageList("Telenovelas México", items)
         )
 
-        val lists = mutableListOf<HomePageList>()
-
-        for ((title, id) in tabs) {
-            val items = document
-                .select("div.tabcontent#$id a")
-                .mapNotNull { it.toSearchResult() }
-
-            if (items.isNotEmpty()) {
-                lists.add(HomePageList(title, items))
-            }
-        }
-
-        // 🔥 FALLBACK: si algo raro pasa, al menos mostrar México
-        if (lists.isEmpty()) {
-            val fallback = document
-                .select("div.tabcontent#Mexico a")
-                .mapNotNull { it.toSearchResult() }
-
-            if (fallback.isNotEmpty()) {
-                lists.add(HomePageList("Telenovelas México", fallback))
-            }
-        }
-
-        return newHomePageResponse(lists, false)
+        return newHomePageResponse(home, false)
     }
 
     // ==============================
