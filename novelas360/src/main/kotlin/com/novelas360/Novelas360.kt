@@ -56,15 +56,16 @@ class Novelas360 : MainAPI() {
         val poster = fixUrl(doc.selectFirst("meta[property=og:image]")?.attr("content"))
         
         val allEpisodes = mutableListOf<Episode>()
-        
-        // Paginación de capítulos
-        var currentUrl: String? = url
         var pageCount = 1
         
-        while (currentUrl != null && pageCount <= 40) {
-            val pageDoc = if (pageCount == 1) doc else getDoc(currentUrl)
-            val items = pageDoc.select("div.item h3 a")
-            
+        // Paginación: Intentamos cargar hasta 30 páginas si existen
+        while (pageCount <= 30) {
+            val currentUrl = if (pageCount == 1) url else "${url.removeSuffix("/")}/page/$pageCount/"
+            val pageDoc = if (pageCount == 1) doc else {
+                try { getDoc(currentUrl) } catch(e: Exception) { null }
+            }
+
+            val items = pageDoc?.select("div.item h3 a") ?: emptyList()
             if (items.isEmpty()) break
             
             items.forEach { el ->
@@ -72,12 +73,7 @@ class Novelas360 : MainAPI() {
                     this.name = el.text().trim()
                 })
             }
-
-            // Buscar link de "Siguiente" o construir el siguiente path
             pageCount++
-            currentUrl = "${url.removeSuffix("/")}/page/$pageCount/"
-            
-            // Si la página actual no tiene resultados, el siguiente getDoc fallará o traerá vacío y el loop romperá
         }
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, allEpisodes.distinctBy { it.data }.reversed()) {
@@ -98,27 +94,22 @@ class Novelas360 : MainAPI() {
             val src = fixUrl(iframe.attr("src")) ?: return@forEach
             
             // Bypass para novelas360.cyou y similares
-            val iframeRes = app.get(src, headers = mapOf(
-                "Referer" to data,
-                "User-Agent" to chromeUA,
-                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-            ))
-
-            val iframeHtml = iframeRes.text
+            val iframeHtml = app.get(src, headers = mapOf("Referer" to data, "User-Agent" to chromeUA)).text
             
-            // Buscamos archivos de video reales dentro del embed
-            val videoRegex = Regex("""(https?.*?\.m3u8.*?)["']""")
+            // Buscamos m3u8 o mp4
+            val videoRegex = Regex("""(https?.*?\.(?:m3u8|mp4).*?)["']""")
             videoRegex.findAll(iframeHtml).forEach { match ->
                 val videoUrl = match.groupValues[1].replace("\\/", "/")
+                
+                // USANDO LA SINTAXIS QUE SÍ COMPILA (Solo 3 argumentos + bloque)
                 callback(
                     newExtractorLink(
                         "Novelas360",
-                        "Servidor HD",
-                        videoUrl,
-                        src,
-                        Qualities.Unknown.value,
-                        true
+                        "Servidor Directo",
+                        videoUrl
                     ).apply {
+                        this.referer = src
+                        this.isM3u8 = videoUrl.contains("m3u8")
                         this.headers = mapOf(
                             "User-Agent" to chromeUA,
                             "Referer" to src,
@@ -128,7 +119,6 @@ class Novelas360 : MainAPI() {
                 )
             }
             
-            // También intentamos con extractores conocidos por si acaso
             loadExtractor(src, data, subtitleCallback, callback)
         }
         return true
