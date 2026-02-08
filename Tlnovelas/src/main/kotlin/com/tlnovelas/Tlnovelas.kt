@@ -108,21 +108,23 @@ class Tlnovelas : MainAPI() {
         )
 
         jwHlsRegex.findAll(response).forEach {
+            val hlsUrl = it.groupValues[1]
+
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     source = "LuluStream",
                     name = "LuluStream",
-                    url = it.groupValues[1],
-                    referer = data,
-                    quality = Qualities.Unknown.value,
+                    url = hlsUrl
+                ) {
+                    referer = data
+                    quality = 0
                     isM3u8 = true
-                )
+                }
             )
         }
 
         // ===============================
         // 3️⃣ Iframes estándar
-        // (Streamwish, Vidhide, Luluvdo…)
         // ===============================
         val iframeRegex = Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
         iframeRegex.findAll(response).forEach {
