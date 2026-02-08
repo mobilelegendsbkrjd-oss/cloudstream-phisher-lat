@@ -55,7 +55,6 @@ class Novelas360 : MainAPI() {
         val allEpisodes = mutableListOf<Episode>()
         var pageCount = 1
         
-        // Paginación funcional para series largas (como Cukur)
         while (pageCount <= 35) {
             val currentUrl = if (pageCount == 1) url else "${url.trimEnd('/')}/page/$pageCount/"
             val pageDoc = try { 
@@ -117,6 +116,7 @@ class NovelasCyou : ExtractorApi() {
     override val mainUrl = "https://novelas360.cyou"
     override val requiresReferer = true
 
+    @Suppress("DEPRECATION") // ESTO ES LO QUE VA A HACER QUE COMPILE
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink> {
         val response = app.get(url, referer = referer).text
         
@@ -125,21 +125,18 @@ class NovelasCyou : ExtractorApi() {
 
         return if (m3u8 != null) {
             val videoUrl = m3u8.replace("\\/", "/")
-            // USANDO .copy() PARA EVITAR EL ERROR DE 'VAL' Y 'DEPRECATED'
             listOf(
-                newExtractorLink(
-                    name,
-                    name,
-                    videoUrl
-                ).copy(
+                ExtractorLink(
+                    source = name,
+                    name = name,
+                    url = videoUrl,
                     referer = url,
                     quality = Qualities.Unknown.value,
                     isM3u8 = videoUrl.contains("m3u8"),
                     headers = mapOf(
                         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
                         "Referer" to url,
-                        "Origin" to "https://novelas360.cyou",
-                        "Accept" to "*/*"
+                        "Origin" to "https://novelas360.cyou"
                     )
                 )
             )
