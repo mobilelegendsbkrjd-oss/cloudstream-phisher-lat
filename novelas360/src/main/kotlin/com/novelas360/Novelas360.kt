@@ -55,8 +55,8 @@ class Novelas360 : MainAPI() {
         val allEpisodes = mutableListOf<Episode>()
         var pageCount = 1
         
-        // PAGINACIÓN PARA CUKUR Y OTRAS LARGAS
-        while (pageCount <= 30) {
+        // Paginación funcional para series largas (como Cukur)
+        while (pageCount <= 35) {
             val currentUrl = if (pageCount == 1) url else "${url.trimEnd('/')}/page/$pageCount/"
             val pageDoc = try { 
                 val d = getDoc(currentUrl)
@@ -90,7 +90,6 @@ class Novelas360 : MainAPI() {
         document.select("iframe").forEach { iframe ->
             val src = fixUrl(iframe.attr("src")) ?: return@forEach
             
-            // Si es el dominio .cyou, usamos nuestro extractor especial
             if (src.contains("novelas360.cyou")) {
                 NovelasCyou().getUrl(src, data).forEach(callback)
             } else {
@@ -113,7 +112,6 @@ class Novelas360 : MainAPI() {
     }
 }
 
-// --- EXTRACTOR PERSONALIZADO PARA MATAR EL ERROR IO ---
 class NovelasCyou : ExtractorApi() {
     override val name = "Novelas360"
     override val mainUrl = "https://novelas360.cyou"
@@ -122,23 +120,25 @@ class NovelasCyou : ExtractorApi() {
     override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink> {
         val response = app.get(url, referer = referer).text
         
-        // Buscamos el m3u8 escondido en el script
         val m3u8 = Regex("""file:\s*"(https?.*?\.(?:m3u8|mp4).*?)"""").find(response)?.groupValues?.get(1)
             ?: Regex("""source:\s*"(https?.*?\.(?:m3u8|mp4).*?)"""").find(response)?.groupValues?.get(1)
 
         return if (m3u8 != null) {
+            val videoUrl = m3u8.replace("\\/", "/")
+            // USANDO .copy() PARA EVITAR EL ERROR DE 'VAL' Y 'DEPRECATED'
             listOf(
-                ExtractorLink(
+                newExtractorLink(
                     name,
                     name,
-                    m3u8.replace("\\/", "/"),
-                    url,
-                    Qualities.Unknown.value,
-                    m3u8.contains("m3u8"),
+                    videoUrl
+                ).copy(
+                    referer = url,
+                    quality = Qualities.Unknown.value,
+                    isM3u8 = videoUrl.contains("m3u8"),
                     headers = mapOf(
                         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
                         "Referer" to url,
-                        "Origin" to mainUrl,
+                        "Origin" to "https://novelas360.cyou",
                         "Accept" to "*/*"
                     )
                 )
