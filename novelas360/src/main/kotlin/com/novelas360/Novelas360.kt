@@ -15,30 +15,33 @@ class Novelas360 : MainAPI() {
     override val supportedTypes = setOf(TvType.TvSeries)
 
     // ==============================
-    // HTTP
+    // SAFE HTTP (NUNCA CRASHEA)
     // ==============================
-    private suspend fun getDoc(url: String): Document =
-        app.get(
-            url,
-            headers = mapOf(
-                "User-Agent" to "Mozilla/5.0",
-                "Referer" to mainUrl
-            )
-        ).document
+    private suspend fun safeDoc(url: String): Document? =
+        runCatching {
+            app.get(
+                url,
+                headers = mapOf(
+                    "User-Agent" to "Mozilla/5.0",
+                    "Referer" to mainUrl
+                )
+            ).document
+        }.getOrNull()
 
     private fun fixUrl(url: String?): String? =
         if (url.isNullOrBlank()) null
         else if (url.startsWith("//")) "https:$url" else url
 
     // ==============================
-    // MAIN PAGE (TABS REALES)
+    // MAIN PAGE (NO ROMPE)
     // ==============================
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
 
-        val document = getDoc("$mainUrl/telenovelas/mexico/")
+        val document = safeDoc("$mainUrl/telenovelas/mexico/")
+            ?: return newHomePageResponse(emptyList(), false)
 
         val tabs = listOf(
             "Telenovelas México" to "Mexico",
@@ -48,22 +51,37 @@ class Novelas360 : MainAPI() {
             "Telenovelas Argentinas" to "Argentina"
         )
 
-        val home = tabs.mapNotNull { (title, id) ->
+        val lists = mutableListOf<HomePageList>()
+
+        for ((title, id) in tabs) {
             val items = document
                 .select("div.tabcontent#$id a")
                 .mapNotNull { it.toSearchResult() }
 
-            if (items.isEmpty()) null else HomePageList(title, items)
+            if (items.isNotEmpty()) {
+                lists.add(HomePageList(title, items))
+            }
         }
 
-        return newHomePageResponse(home, false)
+        // 🔥 FALLBACK: si algo raro pasa, al menos mostrar México
+        if (lists.isEmpty()) {
+            val fallback = document
+                .select("div.tabcontent#Mexico a")
+                .mapNotNull { it.toSearchResult() }
+
+            if (fallback.isNotEmpty()) {
+                lists.add(HomePageList("Telenovelas México", fallback))
+            }
+        }
+
+        return newHomePageResponse(lists, false)
     }
 
     // ==============================
     // SEARCH
     // ==============================
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = getDoc("$mainUrl/?s=$query")
+        val document = safeDoc("$mainUrl/?s=$query") ?: return emptyList()
 
         return document.select(".video-item").mapNotNull {
             val a = it.selectFirst("a") ?: return@mapNotNull null
@@ -80,7 +98,7 @@ class Novelas360 : MainAPI() {
     // LOAD SERIE
     // ==============================
     override suspend fun load(url: String): LoadResponse {
-        val document = getDoc(url)
+        val document = safeDoc(url) ?: throw ErrorLoadingException()
 
         val title = document.selectFirst("h4 span")?.text()
             ?: document.selectFirst("meta[property=og:title]")
@@ -105,7 +123,7 @@ class Novelas360 : MainAPI() {
                     episode = index + 1
                 }
             }
-            .reversed() // 🔥 999 → 1
+            .reversed()
 
         return newTvSeriesLoadResponse(
             title,
@@ -119,7 +137,7 @@ class Novelas360 : MainAPI() {
     }
 
     // ==============================
-    // LOAD LINKS (AJAX REAL – SIN IO)
+    // LOAD LINKS (AJAX)
     // ==============================
     override suspend fun loadLinks(
         data: String,
@@ -128,32 +146,25 @@ class Novelas360 : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        val document = getDoc(data)
+        val document = safeDoc(data) ?: return false
 
         val postId = document.selectFirst("[id^=post-]")
             ?.id()
             ?.removePrefix("post-")
             ?: return false
 
-        val ajaxHtml = app.post(
-            "$mainUrl/wp-admin/admin-ajax.php",
-            data = mapOf(
-                "action" to "mars_load_video_player",
-                "post_id" to postId
-            ),
-            headers = mapOf(
-                "X-Requested-With" to "XMLHttpRequest",
-                "Referer" to data
-            )
-        ).text
+        val ajaxHtml = safeDoc(
+            "$mainUrl/wp-admin/admin-ajax.php?action=mars_load_video_player&post_id=$postId"
+        )?.html() ?: return false
 
         val ajaxDoc = Jsoup.parse(ajaxHtml)
 
         ajaxDoc.select("iframe").forEach {
             var src = it.attr("src")
             if (src.startsWith("//")) src = "https:$src"
-
-            loadExtractor(src, data, subtitleCallback, callback)
+            if (src.isNotBlank()) {
+                loadExtractor(src, data, subtitleCallback, callback)
+            }
         }
 
         return true
