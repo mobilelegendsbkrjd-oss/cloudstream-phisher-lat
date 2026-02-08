@@ -14,7 +14,6 @@ class TeleLibre : MainAPI() {
     override val hasMainPage = true
     override var lang = "es"
     override val hasQuickSearch = true
-    // Cambiado a TvSeries para asegurar compatibilidad total con la librería base
     override val supportedTypes = setOf(TvType.TvSeries)
 
     override val mainPage = mainPageOf(
@@ -36,19 +35,12 @@ class TeleLibre : MainAPI() {
     private fun Element.toSearchResult(): SearchResponse {
         val title = select("img").attr("alt").ifEmpty { this.text() }.trim()
         val href = attr("href")
-        val poster = select("img").attr("src")
+        // fixUrl ayuda a que si el link es "/img/logo.png" se convierta en "https://tele-libre.fans/img/logo.png"
+        val poster = fixUrl(select("img").attr("src"))
 
-        // Usamos newTvSeriesSearchResponse que es el método más estable
         return newTvSeriesSearchResponse(title, fixUrl(href), TvType.TvSeries) { 
-            this.posterUrl = fixUrl(poster) 
+            this.posterUrl = poster 
         }
-    }
-
-    override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get(mainUrl).document
-        return document.select("img.w-28.h-28.object-contain.rounded")
-            .mapNotNull { it.parent()?.toSearchResult() }
-            .filter { it.name.contains(query, ignoreCase = true) }
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -57,16 +49,15 @@ class TeleLibre : MainAPI() {
         val title = document.selectFirst("h3.mb-3")?.text()
             ?.replace("Estás viendo el Canal:", "", true)?.trim() ?: "Canal TV"
         
-        val poster = document.selectFirst(".logoCanal img")?.attr("src")
+        val poster = fixUrl(document.selectFirst(".logoCanal img")?.attr("src") ?: "")
         val description = document.selectFirst(".card-text")?.text()
 
         val episodes = listOf(
             newEpisode(url) { name = "Señal en Vivo" }
         )
 
-        // Usamos la respuesta estándar de TvSeries para evitar errores de referencia
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-            this.posterUrl = fixUrl(poster ?: "")
+            this.posterUrl = poster
             this.plot = description
         }
     }
@@ -80,6 +71,7 @@ class TeleLibre : MainAPI() {
         val response = app.get(data).text
         val videoLinks = mutableSetOf<String>()
 
+        // Extraer links Base64
         val regex = Regex("""(?:embed|r)\s*=\s*['"]([^'"]+)['"]""")
         regex.findAll(response).forEach { match ->
             val encodedData = match.groupValues[1]
@@ -91,6 +83,7 @@ class TeleLibre : MainAPI() {
             } catch (_: Exception) {}
         }
 
+        // Extraer Iframes
         Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE).findAll(response).forEach {
             val link = it.groupValues[1]
             if (!link.contains("google") && !link.contains("adskeeper")) {
@@ -99,6 +92,7 @@ class TeleLibre : MainAPI() {
         }
 
         videoLinks.forEach { link ->
+            // AQUÍ ESTÁ EL TRUCO: Le pasamos 'data' (la URL del canal) como Referer
             loadExtractor(link, data, subtitleCallback, callback)
         }
 
