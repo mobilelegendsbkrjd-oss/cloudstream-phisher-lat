@@ -123,39 +123,44 @@ class Tlnovelas : MainAPI() {
     }
 
     override suspend fun loadLinks(
+        override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val html = app.get(data).text
-        val videoLinks = mutableListOf<String>()
+        val videoLinks = mutableSetOf<String>() // Usamos Set para evitar duplicados
 
-        // JS arrays separados tipo e[0] = ...
-        Regex("""e\[\d+\]\s*=\s*['"](https?://[^'"]+)['"]""").findAll(html)
-            .forEach { videoLinks.add(it.groupValues[1].replace("\\/", "/")) }
+        // 1. Capturar asignaciones indexadas tipo: e[0]='https://...'
+        // Esta es la que requiere el nuevo HTML que proporcionaste
+        Regex("""e\[\d+\]\s*=\s*['"](https?://[^'"]+)['"]""").findAll(html).forEach {
+            videoLinks.add(it.groupValues[1].replace("\\/", "/"))
+        }
 
-        // JS arrays completos tipo var e = [...]
+        // 2. Capturar arrays de JS completos tipo: var e = ['link1', 'link2']
         Regex("""var\s+e\s*=\s*\[([^\]]+)\]""").findAll(html).forEach { match ->
             match.groupValues[1].split(",")
                 .map { it.trim().trim('\'', '"') }
-                .forEach { videoLinks.add(it) }
+                .filter { it.startsWith("http") }
+                .forEach { videoLinks.add(it.replace("\\/", "/")) }
         }
 
-        // Iframes estándar
+        // 3. Capturar Iframes estándar en el HTML
         Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
             .findAll(html)
             .forEach { videoLinks.add(it.groupValues[1]) }
 
-        // Fallback automático: intenta cada link hasta que cargue correctamente
+        // Procesar todos los links encontrados
         for (link in videoLinks) {
             try {
                 loadExtractor(link, data, subtitleCallback, callback)
             } catch (_: Exception) {
-                continue // si falla uno, pasa al siguiente
+                // Si un extractor falla, el bucle continúa con el siguiente
             }
         }
 
         return videoLinks.isNotEmpty()
     }
+
 }
