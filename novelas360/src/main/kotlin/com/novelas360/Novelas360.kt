@@ -1,3 +1,4 @@
+@file:Suppress("DEPRECATION") // ESTO ES CLAVE: Ignora el error de 'deprecated' en todo el archivo
 package com.novelas360
 
 import com.lagradost.cloudstream3.*
@@ -48,15 +49,18 @@ class Novelas360 : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val doc = getDoc(url)
+        // Limpiamos la URL por si viene con /page/X/
+        val cleanUrl = url.replace(Regex("/page/\\d+/?$"), "").trimEnd('/')
+        val doc = getDoc(cleanUrl)
         val title = doc.selectFirst("h4 span, h1")?.text() ?: "Novela"
         val poster = fixUrl(doc.selectFirst("meta[property=og:image]")?.attr("content"))
         
         val allEpisodes = mutableListOf<Episode>()
         var pageCount = 1
         
-        while (pageCount <= 35) {
-            val currentUrl = if (pageCount == 1) url else "${url.trimEnd('/')}/page/$pageCount/"
+        // --- PAGINACIÓN ROBUSTA ---
+        while (pageCount <= 40) {
+            val currentUrl = if (pageCount == 1) cleanUrl else "$cleanUrl/page/$pageCount/"
             val pageDoc = try { 
                 val d = getDoc(currentUrl)
                 if (d.select("div.item h3 a").isEmpty()) null else d
@@ -64,15 +68,18 @@ class Novelas360 : MainAPI() {
 
             if (pageDoc == null) break
             
-            pageDoc.select("div.item h3 a").forEach { el ->
+            val items = pageDoc.select("div.item h3 a")
+            items.forEach { el ->
                 allEpisodes.add(newEpisode(el.attr("href")) {
                     this.name = el.text().trim()
                 })
             }
+            // Si la página tiene pocos items, ya acabamos
+            if (items.size < 5) break
             pageCount++
         }
 
-        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, allEpisodes.distinctBy { it.data }.reversed()) {
+        return newTvSeriesLoadResponse(title, cleanUrl, TvType.TvSeries, allEpisodes.distinctBy { it.data }.reversed()) {
             this.posterUrl = poster
             this.plot = doc.selectFirst("meta[name=description]")?.attr("content")
         }
@@ -89,8 +96,32 @@ class Novelas360 : MainAPI() {
         document.select("iframe").forEach { iframe ->
             val src = fixUrl(iframe.attr("src")) ?: return@forEach
             
+            // Si el video viene de novelas360.cyou, usamos el extractor manual para evitar Error IO
             if (src.contains("novelas360.cyou")) {
-                NovelasCyou().getUrl(src, data).forEach(callback)
+                val response = app.get(src, referer = data).text
+                // Buscamos el link m3u8 o mp4 en el script del reproductor
+                val videoUrl = Regex("""file:\s*"(https?.*?\.(?:m3u8|mp4).*?)"""").find(response)?.groupValues?.get(1)
+                    ?: Regex("""source:\s*"(https?.*?\.(?:m3u8|mp4).*?)"""").find(response)?.groupValues?.get(1)
+                
+                if (videoUrl != null) {
+                    val finalUrl = videoUrl.replace("\\/", "/")
+                    callback(
+                        ExtractorLink(
+                            source = "Novelas360",
+                            name = "Servidor HD",
+                            url = finalUrl,
+                            referer = src,
+                            quality = Qualities.Unknown.value,
+                            isM3u8 = finalUrl.contains("m3u8"),
+                            headers = mapOf(
+                                "User-Agent" to chromeUA,
+                                "Referer" to src,
+                                "Origin" to "https://novelas360.cyou",
+                                "Accept" to "*/*"
+                            )
+                        )
+                    )
+                }
             } else {
                 loadExtractor(src, data, subtitleCallback, callback)
             }
@@ -108,38 +139,5 @@ class Novelas360 : MainAPI() {
         return newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
             this.posterUrl = poster
         }
-    }
-}
-
-class NovelasCyou : ExtractorApi() {
-    override val name = "Novelas360"
-    override val mainUrl = "https://novelas360.cyou"
-    override val requiresReferer = true
-
-    @Suppress("DEPRECATION") // ESTO ES LO QUE VA A HACER QUE COMPILE
-    override suspend fun getUrl(url: String, referer: String?): List<ExtractorLink> {
-        val response = app.get(url, referer = referer).text
-        
-        val m3u8 = Regex("""file:\s*"(https?.*?\.(?:m3u8|mp4).*?)"""").find(response)?.groupValues?.get(1)
-            ?: Regex("""source:\s*"(https?.*?\.(?:m3u8|mp4).*?)"""").find(response)?.groupValues?.get(1)
-
-        return if (m3u8 != null) {
-            val videoUrl = m3u8.replace("\\/", "/")
-            listOf(
-                ExtractorLink(
-                    source = name,
-                    name = name,
-                    url = videoUrl,
-                    referer = url,
-                    quality = Qualities.Unknown.value,
-                    isM3u8 = videoUrl.contains("m3u8"),
-                    headers = mapOf(
-                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-                        "Referer" to url,
-                        "Origin" to "https://novelas360.cyou"
-                    )
-                )
-            )
-        } else emptyList()
     }
 }
