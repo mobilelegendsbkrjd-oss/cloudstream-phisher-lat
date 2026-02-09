@@ -2,77 +2,87 @@ package com.tlnovelas
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import org.jsoup.nodes.Element
 
 class Tlnovelas : MainAPI() {
 
     override var mainUrl = "https://ww2.tlnovelas.net"
     override var name = "Tlnovelas"
-    override val hasMainPage = true
-    override var lang = "es"
     override val supportedTypes = setOf(TvType.TvSeries)
+    override var lang = "es"
 
-    override val mainPage = mainPageOf(
-        "$mainUrl/gratis/telenovelas/" to "Telenovelas"
-    )
-
-    // ======================= HOME =======================
-
+    // ==============================
+    // HOME
+    // ==============================
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
 
-        val doc = app.get(request.data).document
+        val doc = app.get("$mainUrl/gratis/telenovelas/").document
 
-        val items = doc.select(".ani-card").mapNotNull {
-            val a = it.selectFirst("a") ?: return@mapNotNull null
-            val title = it.selectFirst(".ani-txt")?.text()?.trim() ?: return@mapNotNull null
-            val poster = it.selectFirst("img")?.attr("src")
-
-            newTvSeriesSearchResponse(
-                title,
-                a.attr("href"),
-                TvType.TvSeries
-            ) {
-                posterUrl = poster
-            }
-        }
+        val items = doc.select(".vk-poster").mapNotNull { it.toSearchResult() }
 
         return newHomePageResponse(
-            request.name,
-            items,
+            listOf(
+                HomePageList(
+                    name = "Telenovelas",
+                    list = items
+                )
+            ),
             hasNext = false
         )
     }
 
-    // ======================= SERIE =======================
+    private fun Element.toSearchResult(): SearchResponse? {
+        val a = selectFirst("a") ?: return null
+        val title = selectFirst(".vk-info p")?.text()?.trim() ?: return null
+        val href = a.attr("href")
+        val poster = selectFirst("img")?.attr("src")
 
+        return newTvSeriesSearchResponse(
+            title,
+            href,
+            TvType.TvSeries
+        ) {
+            posterUrl = poster
+        }
+    }
+
+    // ==============================
+    // SEARCH
+    // ==============================
+    override suspend fun search(query: String): List<SearchResponse> {
+        val url = "$mainUrl/buscar/?q=${query.replace(" ", "+")}"
+        val doc = app.get(url).document
+
+        return doc.select(".vk-poster").mapNotNull { it.toSearchResult() }
+    }
+
+    // ==============================
+    // LOAD SERIE
+    // ==============================
     override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url).document
 
-        val title = doc.selectFirst("h1")?.text()
-            ?.replace("Ver", "", true)
-            ?.replace("Capítulos", "", true)
-            ?.trim()
-            ?: "Telenovela"
+        val title = doc.selectFirst("h1")?.text()?.trim()
+            ?: throw ErrorLoadingException("No title")
 
-        val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")
-            ?: doc.selectFirst(".ani-img img")?.attr("src")
+        val poster = doc.selectFirst(".vk-imagen img")?.attr("src")
+            ?: doc.selectFirst("meta[property=og:image]")?.attr("content")
 
         val description = doc.selectFirst(".card-text")?.text()
 
-        val episodes = doc.select("a[href*='/ver/']").mapNotNull {
-            val epUrl = it.attr("href")
-            val text = it.text()
+        val episodes = doc.select("a[href*=\"/ver/\"]").mapIndexedNotNull { index, el ->
+            val epUrl = el.attr("href")
+            val epName = el.text().ifBlank { "Capítulo ${index + 1}" }
 
-            val number = Regex("""Cap[ií]tulo\s*(\d+)""", RegexOption.IGNORE_CASE)
-                .find(text)?.groupValues?.get(1)?.toIntOrNull()
-
-            newEpisode(epUrl) {
-                name = text
-                episode = number
-            }
-        }.distinctBy { it.data }.reversed()
+            newEpisode(
+                epUrl,
+                epName,
+                episode = index + 1
+            )
+        }
 
         return newTvSeriesLoadResponse(
             title,
@@ -85,8 +95,9 @@ class Tlnovelas : MainAPI() {
         }
     }
 
-    // ======================= VIDEOS =======================
-
+    // ==============================
+    // LINKS / VIDEO
+    // ==============================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -96,7 +107,7 @@ class Tlnovelas : MainAPI() {
 
         val html = app.get(data).text
 
-        // 1️⃣ Links directos en arrays JS
+        // 1️⃣ URLs directas (streamwish, dood, lulu, etc)
         Regex("""e\[\d+]\s*=\s*['"](https?://[^'"]+)['"]""")
             .findAll(html)
             .forEach {
@@ -108,7 +119,7 @@ class Tlnovelas : MainAPI() {
                 )
             }
 
-        // 2️⃣ Blogger IDs: e[0]='oEiMaglJZklh|1'
+        // 2️⃣ Blogger tokens → Marimar FIX
         Regex("""e\[\d+]\s*=\s*['"]([a-zA-Z0-9_-]+)\|\d+['"]""")
             .findAll(html)
             .forEach {
@@ -120,14 +131,16 @@ class Tlnovelas : MainAPI() {
                         source = "Blogger",
                         name = "Blogger",
                         url = bloggerUrl,
-                        referer = data,
-                        quality = Qualities.Unknown.value
+                        headers = mapOf(
+                            "Referer" to data,
+                            "User-Agent" to USER_AGENT
+                        )
                     )
                 )
             }
 
-        // 3️⃣ Iframes estándar
-        Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""")
+        // 3️⃣ Iframes normales
+        Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
             .findAll(html)
             .forEach {
                 loadExtractor(
