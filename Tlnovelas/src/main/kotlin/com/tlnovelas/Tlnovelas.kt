@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
+import java.net.URLDecoder
 
 class Tlnovelas : MainAPI() {
 
@@ -80,6 +81,32 @@ class Tlnovelas : MainAPI() {
         }
     }
 
+    private fun decodeVideoUrl(encoded: String): String {
+        return try {
+            // Decodificar la cadena ofuscada
+            val parts = encoded.split("|")
+            if (parts.size == 2) {
+                val encodedStr = parts[0]
+                val key = parts[1].toInt()
+                
+                // Descifrado simple (basado en el patrón común de estos sitios)
+                val decodedChars = mutableListOf<Char>()
+                for (i in encodedStr.indices) {
+                    val charCode = encodedStr[i].code - key - i
+                    decodedChars.add(charCode.toChar())
+                }
+                val decodedString = decodedChars.joinToString("")
+                
+                // URL decode si es necesario
+                URLDecoder.decode(decodedString, "UTF-8")
+            } else {
+                encoded
+            }
+        } catch (e: Exception) {
+            encoded
+        }
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -89,20 +116,65 @@ class Tlnovelas : MainAPI() {
         val response = app.get(data).text
         val videoLinks = mutableSetOf<String>()
 
-        // 1. FORMATO NUEVO (e[0] = '...')
-        Regex("""e\[\d+\]\s*=\s*['"](https?://[^'"]+)['"]""").findAll(response).forEach {
-            videoLinks.add(it.groupValues[1].replace("\\/", "/"))
+        // 1. BUSCAR Y DECODIFICAR FORMATO OFUSCADO JS (e[0] = '...')
+        val regexJsArray = Regex("""e\[\d+\]\s*=\s*['"]([^'"]+)['"]""")
+        regexJsArray.findAll(response).forEach { match ->
+            val encodedUrl = match.groupValues[1]
+            val decodedUrl = decodeVideoUrl(encodedUrl)
+            if (decodedUrl.startsWith("http")) {
+                videoLinks.add(decodedUrl)
+            }
         }
 
-        // 2. FORMATO VIEJO (var e = ['...', '...'])
+        // 2. BUSCAR EN LA FUNCIÓN v_ideo()
+        val regexVideFunc = Regex("""v_ideo\(([^)]+)\)""")
+        regexVideFunc.findAll(response).forEach { match ->
+            val param = match.groupValues[1]
+            // Buscar el valor correspondiente en el array e[]
+            val arrayIndex = Regex("""e\[(\d+)\]""").find(param)?.groupValues?.get(1)?.toIntOrNull()
+            if (arrayIndex != null) {
+                // Buscar la definición de ese índice en el array
+                val arrayRegex = Regex("""e\[$arrayIndex\]\s*=\s*['"]([^'"]+)['"]""")
+                arrayRegex.find(response)?.let { arrayMatch ->
+                    val encodedUrl = arrayMatch.groupValues[1]
+                    val decodedUrl = decodeVideoUrl(encodedUrl)
+                    if (decodedUrl.startsWith("http")) {
+                        videoLinks.add(decodedUrl)
+                    }
+                }
+            }
+        }
+
+        // 3. FORMATO VIEJO (var e = ['...', '...'])
         Regex("""var\s+e\s*=\s*\[([^\]]+)\]""").findAll(response).forEach { match ->
             match.groupValues[1].split(",")
                 .map { it.trim().trim('\'', '"') }
-                .filter { it.startsWith("http") }
-                .forEach { videoLinks.add(it.replace("\\/", "/")) }
+                .filter { it.isNotEmpty() }
+                .forEach { encodedUrl ->
+                    val decodedUrl = decodeVideoUrl(encodedUrl)
+                    if (decodedUrl.startsWith("http")) {
+                        videoLinks.add(decodedUrl)
+                    }
+                }
         }
 
-        // 3. IFRAMES
+        // 4. BUSCAR DIRECTAMENTE PATRONES DECODIFICADOS
+        val decodedPatterns = listOf(
+            Regex("""https?://[^"'\s<>]+\.(mp4|m3u8|mkv|avi|mov|flv|wmv|webm)[^"'\s<>]*""", RegexOption.IGNORE_CASE),
+            Regex("""https?://[^"'\s<>]+/video/[^"'\s<>]+""", RegexOption.IGNORE_CASE),
+            Regex("""https?://[^"'\s<>]+/embed/[^"'\s<>]+""", RegexOption.IGNORE_CASE)
+        )
+        
+        decodedPatterns.forEach { pattern ->
+            pattern.findAll(response).forEach { match ->
+                val url = match.value
+                if (!url.contains("google") && !url.contains("adskeeper") && !url.contains("googletagmanager")) {
+                    videoLinks.add(url)
+                }
+            }
+        }
+
+        // 5. IFRAMES como respaldo
         Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE).findAll(response).forEach {
             val link = it.groupValues[1]
             if (!link.contains("google") && !link.contains("adskeeper")) {
@@ -110,13 +182,18 @@ class Tlnovelas : MainAPI() {
             }
         }
 
-        // Procesar todo sin excepción
+        // Procesar todos los enlaces encontrados
+        var success = false
         videoLinks.forEach { link ->
             try {
-                loadExtractor(link, data, subtitleCallback, callback)
-            } catch (_: Exception) {}
+                if (loadExtractor(link, data, subtitleCallback, callback)) {
+                    success = true
+                }
+            } catch (e: Exception) {
+                // Ignorar excepciones y continuar
+            }
         }
 
-        return videoLinks.isNotEmpty()
+        return success || videoLinks.isNotEmpty()
     }
 }
