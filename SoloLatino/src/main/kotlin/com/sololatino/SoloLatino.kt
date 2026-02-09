@@ -18,46 +18,46 @@ class SoloLatino : MainAPI() {
         TvType.Cartoon,
     )
 
-    // URL del JSON con tus sagas curadas (tú decides el orden y las portadas aquí)
+    // URL del JSON con tus sagas curadas
     private val sagasJsonUrl = "https://raw.githubusercontent.com/mobilelegendsbkrjd-oss/lat_cs_bkrjd/main/ListasSL.json"
 
     @Suppress("DEPRECATION")
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val items = ArrayList<HomePageList>()
 
-        // Orden exacto que pediste
-        val urls = listOf(
-            Pair("Peliculas", "$mainUrl/peliculas"),
-            Pair("Series", "$mainUrl/series"),
-            Pair("Animes", "$mainUrl/animes"),
-            Pair("Cartoons", "$mainUrl/genre_series/toons"),
-            Pair("Doramas", "$mainUrl/genre_series/kdramas/"),
-            Pair("Netflix", "$mainUrl/network/netflix/"),
-            Pair("Amazon", "$mainUrl/network/amazon/"),
-            Pair("Disney+", "$mainUrl/network/disney/"),
-            Pair("HBO Max", "$mainUrl/network/hbo-max/"),
-            Pair("Apple TV", "$mainUrl/network/apple-tv/"),
-            Pair("Hulu", "$mainUrl/network/hulu/"),
-            Pair("Sagas", sagasJsonUrl)   // ← Cambiado a "Sagas" y usando tu JSON
+        // Orden EXACTO + emojis para que se vea pro
+        val sections = listOf(
+            "🎥 Películas" to "$mainUrl/peliculas",
+            "📺 Series" to "$mainUrl/series",
+            "🌸 Animes" to "$mainUrl/animes",
+            "🦁 Cartoons" to "$mainUrl/genre_series/toons",
+            "💕 Doramas" to "$mainUrl/genre_series/kdramas/",
+            "🎬 Netflix" to "$mainUrl/network/netflix/",
+            "🟠 Amazon" to "$mainUrl/network/amazon/",
+            "🐭 Disney+" to "$mainUrl/network/disney/",
+            "🟣 HBO Max" to "$mainUrl/network/hbo-max/",
+            "🍎 Apple TV" to "$mainUrl/network/apple-tv/",
+            "🟢 Hulu" to "$mainUrl/network/hulu/",
+            "🔥 Sagas" to sagasJsonUrl
         )
 
-        urls.amap { (name, url) ->
+        // Loop síncrono para respetar el orden al 100%
+        sections.forEach { (name, url) ->
             val tvType = when (name) {
-                "Peliculas" -> TvType.Movie
-                "Series", "Doramas", "Netflix", "Amazon", "Disney+", "HBO Max", "Apple TV", "Hulu", "Sagas" -> TvType.TvSeries
-                "Animes" -> TvType.Anime
-                "Cartoons" -> TvType.Cartoon
+                "🎥 Películas" -> TvType.Movie
+                "📺 Series", "💕 Doramas", "🎬 Netflix", "🟠 Amazon", "🐭 Disney+", "🟣 HBO Max", "🍎 Apple TV", "🟢 Hulu", "🔥 Sagas" -> TvType.TvSeries
+                "🌸 Animes" -> TvType.Anime
+                "🦁 Cartoons" -> TvType.Cartoon
                 else -> TvType.Others
             }
 
-            val home = if (name == "Sagas") {
+            val home = if (name == "🔥 Sagas") {
                 try {
                     val jsonText = app.get(url, timeout = 20).text.trim()
 
-                    // Parsing simple sin dependencias extras
                     val sagas = mutableListOf<SearchResponse>()
                     val cleanJson = jsonText.removePrefix("[").removeSuffix("]").trim()
-                    if (cleanJson.isEmpty()) return@amap HomePageList(name, emptyList())
+                    if (cleanJson.isEmpty()) return@forEach
 
                     val objetos = cleanJson.split("},").map { it.trim() + "}" }
 
@@ -73,12 +73,10 @@ class SoloLatino : MainAPI() {
 
                             sagas.add(
                                 newTvSeriesSearchResponse(title, link, tvType) {
-                                    this.posterUrl = poster   // ← Usa la portada que tú declaras en el JSON
+                                    this.posterUrl = poster  // Usa la portada que declaras en el JSON
                                 }
                             )
-                        } catch (e: Exception) {
-                            // Ignora si algún objeto está mal
-                        }
+                        } catch (e: Exception) {}
                     }
 
                     sagas
@@ -98,8 +96,11 @@ class SoloLatino : MainAPI() {
                 }
             }
 
-            items.add(HomePageList(name, home))
+            if (home.isNotEmpty()) {
+                items.add(HomePageList(name, home))
+            }
         }
+
         return newHomePageResponse(items)
     }
 
