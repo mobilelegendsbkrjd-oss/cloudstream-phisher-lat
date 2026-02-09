@@ -4,7 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 
-class SoloLatino : MainAPI() {
+class SoloLatinoPlugin : MainAPI() {
     override var mainUrl = "https://sololatino.net"
     override var name = "SoloLatino"
     override var lang = "mx"
@@ -18,6 +18,9 @@ class SoloLatino : MainAPI() {
         TvType.Cartoon,
     )
 
+    // URL del JSON externo con las listas curadas
+    private val listasJsonUrl = "https://raw.githubusercontent.com/mobilelegendsbkrjd-oss/lat_cs_bkrjd/main/ListasSL.json"
+
     @Suppress("DEPRECATION")
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val items = ArrayList<HomePageList>()
@@ -26,28 +29,71 @@ class SoloLatino : MainAPI() {
             Pair("Series", "$mainUrl/series"),
             Pair("Animes", "$mainUrl/animes"),
             Pair("Cartoons", "$mainUrl/genre_series/toons"),
-            Pair("Doramas", "$mainUrl/genre_series/kdramas/"),   // ← Nueva sección agregada aquí
-            Pair("Listas de la comunidad", "$mainUrl/listas/")   // Si ya la tenías de antes, la dejo
+            Pair("Doramas", "$mainUrl/genre_series/kdramas/"),
+            Pair("Listas curadas", listasJsonUrl)   // ← Nueva sección desde JSON
         )
 
         urls.amap { (name, url) ->
             val tvType = when (name) {
                 "Peliculas" -> TvType.Movie
-                "Series", "Doramas", "Listas de la comunidad" -> TvType.TvSeries
+                "Series", "Doramas", "Listas curadas" -> TvType.TvSeries
                 "Animes" -> TvType.Anime
                 "Cartoons" -> TvType.Cartoon
                 else -> TvType.Others
             }
-            val finalUrl = if (page > 1) "$url/page/$page/" else url
-            val doc = app.get(finalUrl).document
-            val home = doc.select("div.items article.item").map {
-                val title = it.selectFirst("a div.data h3")?.text()
-                val link = it.selectFirst("a")?.attr("href")
-                val img = it.selectFirst("div.poster img.lazyload")?.attr("data-srcset")
-                newTvSeriesSearchResponse(title!!, link!!, tvType, true) {
-                    this.posterUrl = img
+
+            val home = if (name == "Listas curadas") {
+                try {
+                    val jsonText = app.get(url, timeout = 20).text.trim()
+
+                    // Parsing muy simple y seguro (sin Gson ni dependencias extras)
+                    // Asume formato: [ { "title":"...", "url":"...", "poster":"..." }, ... ]
+                    val listas = mutableListOf<SearchResponse>()
+
+                    // Quitamos corchetes y dividimos por objetos
+                    val cleanJson = jsonText.removePrefix("[").removeSuffix("]").trim()
+                    if (cleanJson.isEmpty()) return@amap HomePageList(name, emptyList())
+
+                    val objetos = cleanJson.split("},").map { it.trim() + "}" }
+
+                    objetos.forEach { objStr ->
+                        try {
+                            val titleMatch = Regex(""""title"\s*:\s*"([^"]*)"""").find(objStr)
+                            val urlMatch = Regex(""""url"\s*:\s*"([^"]*)"""").find(objStr)
+                            val posterMatch = Regex(""""poster"\s*:\s*"([^"]*)"""").find(objStr)
+
+                            val title = titleMatch?.groupValues?.get(1) ?: return@forEach
+                            val link = urlMatch?.groupValues?.get(1) ?: return@forEach
+                            val poster = posterMatch?.groupValues?.get(1)
+
+                            listas.add(
+                                newTvSeriesSearchResponse(title, link, tvType) {
+                                    this.posterUrl = poster
+                                }
+                            )
+                        } catch (e: Exception) {
+                            // Ignora objeto mal formado
+                        }
+                    }
+
+                    listas
+                } catch (e: Exception) {
+                    // Si falla la conexión o parseo → categoría vacía sin crash
+                    emptyList()
+                }
+            } else {
+                val finalUrl = if (page > 1) "$url/page/$page/" else url
+                val doc = app.get(finalUrl).document
+                doc.select("div.items article.item").map {
+                    val title = it.selectFirst("a div.data h3")?.text()
+                    val link = it.selectFirst("a")?.attr("href")
+                    val img = it.selectFirst("div.poster img.lazyload")?.attr("data-srcset")
+                    newTvSeriesSearchResponse(title!!, link!!, tvType, true) {
+                        this.posterUrl = img
+                    }
                 }
             }
+
             items.add(HomePageList(name, home))
         }
         return newHomePageResponse(items)
@@ -79,7 +125,6 @@ class SoloLatino : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url).document
 
-        // Si ya tenías el bloque de listas de la comunidad, lo dejo aquí (si no, puedes borrarlo o comentarlo)
         val isUserList = url.contains("/listas/") && doc.selectFirst("div.infoCard") != null
 
         if (isUserList) {
@@ -178,7 +223,6 @@ class SoloLatino : MainAPI() {
         }
     }
 
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -202,4 +246,4 @@ class SoloLatino : MainAPI() {
         }
         return true
     }
-}
+                                                    }
