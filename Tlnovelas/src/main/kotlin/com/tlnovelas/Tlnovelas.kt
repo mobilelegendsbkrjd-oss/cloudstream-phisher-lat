@@ -40,7 +40,7 @@ class Tlnovelas : MainAPI() {
 
         if (href.contains("/ver/")) {
             val slug = href.removeSuffix("/").substringAfterLast("/")
-                .replace(Regex("(?i)-capitulo-\\d+|-capítulo-\\d+"), "")
+                .replace(Regex("""(?i)-capitulo-\d+|-capítulo-\d+"""), "")
             href = "$mainUrl/novela/$slug/"
         }
 
@@ -95,9 +95,7 @@ class Tlnovelas : MainAPI() {
         val response = app.get(data).text
         val videoLinks = mutableSetOf<String>()
 
-        // ───────────────────────────────────────────────
-        // 1. Formatos antiguos (mantener por compatibilidad)
-        // ───────────────────────────────────────────────
+        // Formatos antiguos / directos
         Regex("""e\[\d+\]\s*=\s*['"](https?://[^'"]+)['"]""").findAll(response).forEach {
             videoLinks.add(it.groupValues[1].replace("\\/", "/"))
         }
@@ -109,11 +107,9 @@ class Tlnovelas : MainAPI() {
                 .forEach { videoLinks.add(it.replace("\\/", "/")) }
         }
 
-        // ───────────────────────────────────────────────
-        // 2. Patrón principal actual (e[0] = 'ID|numero')
-        // ───────────────────────────────────────────────
+        // Patrón actual principal: e[0] = 'ID|1'  → genera iframe
         Regex("""e\[\d+\]\s*=\s*['"]([^'"]+)['"]""").findAll(response).forEach { match ->
-            val fullCode = match.groupValues[1]  // ej: oEiMaglJZklh|1
+            val fullCode = match.groupValues[1]   // ej: abc123|1
 
             if (fullCode.contains("|")) {
                 val parts = fullCode.split("|")
@@ -124,44 +120,36 @@ class Tlnovelas : MainAPI() {
                     val baseUrl = when (option) {
                         "1" -> "https://hqq.to/e/"
                         "2" -> "https://dood.yt/e/"
-                        "3" -> "https://player.ojearanim.com/e/"
+                        "3" -> "https://player.ojearanime.com/e/"
                         "4" -> "https://player.vernovelastv.net/e/"
                         else -> ""
                     }
 
                     if (baseUrl.isNotEmpty() && id.isNotBlank()) {
-                        val embedUrl = baseUrl + id
-                        videoLinks.add(embedUrl)
+                        videoLinks.add(baseUrl + id)
                     }
                 }
             }
         }
 
-        // ───────────────────────────────────────────────
-        // 3. Iframes directos (por si aparecen después del JS)
-        // ───────────────────────────────────────────────
-        Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
-            .findAll(response)
+        // Iframes que ya aparezcan en el HTML
+        Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", setOf(RegexOption.IGNORE_CASE)).findAll(response)
             .forEach {
                 val link = it.groupValues[1]
-                if (!link.contains("google") && !link.contains("ads") && link.contains("/e/")) {
+                if (link.contains("/e/") && !link.contains("google") && !link.contains("ads")) {
                     videoLinks.add(link)
                 }
             }
 
-        // ───────────────────────────────────────────────
-        // 4. Enviar todos los links encontrados a los extractores
-        // ───────────────────────────────────────────────
         var foundAny = false
         videoLinks.forEach { link ->
             try {
-                val success = loadExtractor(link, data, subtitleCallback, callback)
-                if (success) foundAny = true
-            } catch (_: Throwable) {
-                // ignorar errores de un extractor fallido
-            }
+                if (loadExtractor(link, data, subtitleCallback, callback)) {
+                    foundAny = true
+                }
+            } catch (_: Throwable) {}
         }
 
-        return foundAny || videoLinks.isNotEmpty()
+        return foundAny
     }
 }
