@@ -18,6 +18,7 @@ import com.lagradost.cloudstream3.base64DecodeArray
 import com.lagradost.cloudstream3.base64Encode
 import com.lagradost.cloudstream3.fixTitle
 import com.lagradost.cloudstream3.mvvm.logError
+import com.lagradost.cloudstream3.runAllAsync
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -278,13 +279,19 @@ suspend fun loadSourceNameExtractor(
     val fixSize = if(size.isNotEmpty()) " $size" else ""
     loadExtractor(url, referer, subtitleCallback) { link ->
         CoroutineScope(Dispatchers.IO).launch {
+            val label = if (fixSize.isBlank()) {
+                "$source [${link.source}]"
+            } else {
+                "$source [${link.source} $fixSize]"
+            }
+
             callback.invoke(
                 newExtractorLink(
                     source,
-                    "$source[${link.source}$fixSize]",
+                    label,
                     link.url,
                 ) {
-                    this.quality = link.quality
+                    this.quality = quality ?: link.quality
                     this.type = link.type
                     this.referer = link.referer
                     this.headers = link.headers
@@ -296,7 +303,7 @@ suspend fun loadSourceNameExtractor(
 }
 
 
-suspend fun loadSourceNameExtractor(
+suspend fun loadDisplaySourceNameExtractor(
     sourceName: String?,
     displayName: String?,
     url: String,
@@ -454,7 +461,7 @@ fun getIndexQualityTags(str: String?, fullTag: Boolean = false): String {
 }
 
 fun getIndexQuality(str: String?): Int {
-    return Regex("(\\d{3,4})[pP]").find(str ?: "")?.groupValues?.getOrNull(1)?.toIntOrNull()
+    return Regex("""\b(2160|1440|1080|720|576|540|480)\s*[pP]\b""").find(str.orEmpty())?.groupValues?.getOrNull(1)?.toIntOrNull()
         ?: Qualities.Unknown.value
 }
 
@@ -1272,7 +1279,7 @@ fun getAnidbEid(jsonString: String, episodeNumber: Int?): Int? {
 @RequiresApi(Build.VERSION_CODES.O)
 fun generateVrfAES(movieId: String, userId: String): String {
     // Step 1: Derive key = SHA-256("hack_" + userId)
-    val driveKey = base64Decode("MmpFWUwzSlJ4Qg==")
+    val driveKey = base64Decode("emgmNzJjaU8zOXRnSDU=")
     val keyData = "${driveKey}_$userId".toByteArray(Charsets.UTF_8)
     val keyBytes = MessageDigest.getInstance("SHA-256").digest(keyData)
     val keySpec = SecretKeySpec(keyBytes, "AES")
@@ -1395,6 +1402,7 @@ data class MetaMappings(
     @JsonProperty("imdb_id") val imdbId: String? = null,
     @JsonProperty("mal_id") val malId: Int? = null,
     @JsonProperty("anilist_id") val anilistId: Int? = null,
+    @JsonProperty("kitsu_id") val kitsuid: String? = null,
 )
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class ImageData(
@@ -1426,44 +1434,54 @@ data class MetaAnimeData(
 )
 
 fun cleanTitle(title: String): String {
-    val parts = title.split(".", "-", "_")
 
-    val qualityTags = listOf(
-        "WEBRip", "WEB-DL", "WEB", "BluRay", "HDRip", "DVDRip", "HDTV",
-        "CAM", "TS", "R5", "DVDScr", "BRRip", "BDRip", "DVD", "PDTV",
-        "HD"
+    val name = title.replace(Regex("\\.[a-zA-Z0-9]{2,4}$"), "")
+
+    val normalized = name
+        .replace(Regex("WEB[-_. ]?DL", RegexOption.IGNORE_CASE), "WEB-DL")
+        .replace(Regex("WEB[-_. ]?RIP", RegexOption.IGNORE_CASE), "WEBRIP")
+        .replace(Regex("H[ .]?265", RegexOption.IGNORE_CASE), "H265")
+        .replace(Regex("H[ .]?264", RegexOption.IGNORE_CASE), "H264")
+        .replace(Regex("DDP[ .]?([0-9]\\.[0-9])", RegexOption.IGNORE_CASE), "DDP$1")
+
+    val parts = normalized.split(" ", "_", ".")
+
+    val sourceTags = setOf(
+        "WEB-DL", "WEBRIP", "BLURAY", "HDRIP",
+        "DVDRIP", "HDTV", "CAM", "TS", "BRRIP", "BDRIP"
     )
 
-    val audioTags = listOf(
-        "AAC", "AC3", "DTS", "MP3", "FLAC", "DD5", "EAC3", "Atmos"
-    )
+    val codecTags = setOf("H264", "H265", "X264", "X265", "HEVC", "AVC")
 
-    val subTags = listOf(
-        "ESub", "ESubs", "Subs", "MultiSub", "NoSub", "EnglishSub", "HindiSub"
-    )
+    val audioTags = setOf("AAC", "AC3", "DTS", "MP3", "FLAC", "DD", "DDP", "EAC3")
 
-    val codecTags = listOf(
-        "x264", "x265", "H264", "HEVC", "AVC"
-    )
+    val audioExtras = setOf("ATMOS")
 
-    val startIndex = parts.indexOfFirst { part ->
-        qualityTags.any { tag -> part.contains(tag, ignoreCase = true) }
+    val hdrTags = setOf("SDR","HDR", "HDR10", "HDR10+", "DV", "DOLBYVISION")
+
+    val filtered = parts.mapNotNull { part ->
+        val p = part.uppercase()
+
+        when {
+            sourceTags.contains(p) -> p
+            codecTags.contains(p) -> p
+            audioTags.any { p.startsWith(it) } -> p
+            audioExtras.contains(p) -> p
+            hdrTags.contains(p) -> {
+                when (p) {
+                    "DV", "DOLBYVISION" -> "DOLBYVISION"
+                    else -> p
+                }
+            }
+            p == "NF" || p == "CR" -> p
+            else -> null
+        }
     }
 
-    val endIndex = parts.indexOfLast { part ->
-        subTags.any { tag -> part.contains(tag, ignoreCase = true) } ||
-                audioTags.any { tag -> part.contains(tag, ignoreCase = true) } ||
-                codecTags.any { tag -> part.contains(tag, ignoreCase = true) }
-    }
-
-    return if (startIndex != -1 && endIndex != -1 && endIndex >= startIndex) {
-        parts.subList(startIndex, endIndex + 1).joinToString(".")
-    } else if (startIndex != -1) {
-        parts.subList(startIndex, parts.size).joinToString(".")
-    } else {
-        parts.takeLast(3).joinToString(".")
-    }
+    return filtered.distinct().joinToString(" ")
 }
+
+
 
 //Anichi
 
@@ -1754,10 +1772,10 @@ fun cinemaOSGenerateHash(t: CinemaOsSecretKeyRequest,isSeries: Boolean): String 
 private fun createContentString(info: CinemaOsSecretKeyRequest): String {
     val parts = mutableListOf<String>()
 
-    info.tmdbId?.let { parts.add("tmdbId:$it") }
-    info.imdbId?.let { parts.add("imdbId:$it") }
-    info.seasonId?.takeIf { it.isNotEmpty() }?.let { parts.add("seasonId:$it") }
-    info.episodeId?.takeIf { it.isNotEmpty() }?.let { parts.add("episodeId:$it") }
+    info.tmdbId.let { parts.add("tmdbId:$it") }
+    info.imdbId.let { parts.add("imdbId:$it") }
+    info.seasonId.takeIf { it.isNotEmpty() }?.let { parts.add("seasonId:$it") }
+    info.episodeId.takeIf { it.isNotEmpty() }?.let { parts.add("episodeId:$it") }
 
     return parts.joinToString("|")
 }
@@ -2130,41 +2148,52 @@ suspend fun fetchTmdbLogoUrl(
     tmdbId: Int?,
     appLangCode: String?
 ): String? {
-
     if (tmdbId == null) return null
 
-    val appLang = appLangCode
-        ?.substringBefore("-")
-        ?.lowercase()
-
+    val appLang = appLangCode?.substringBefore("-")?.lowercase()
     val url = if (type == TvType.Movie) {
         "$tmdbAPI/movie/$tmdbId/images?api_key=$apiKey"
     } else {
         "$tmdbAPI/tv/$tmdbId/images?api_key=$apiKey"
     }
 
-    val json = runCatching { JSONObject(app.get(url).text) }.getOrNull()
-        ?: return null
-
+    val json = runCatching { JSONObject(app.get(url).text) }.getOrNull() ?: return null
     val logos = json.optJSONArray("logos") ?: return null
     if (logos.length() == 0) return null
 
     fun logoUrlAt(i: Int): String = "https://image.tmdb.org/t/p/w500${logos.getJSONObject(i).optString("file_path")}"
+    fun isSvg(i: Int): Boolean = logos.getJSONObject(i).optString("file_path").endsWith(".svg", ignoreCase = true)
 
     if (!appLang.isNullOrBlank()) {
+        var svgFallback: String? = null
         for (i in 0 until logos.length()) {
             val logo = logos.optJSONObject(i) ?: continue
             if (logo.optString("iso_639_1") == appLang) {
+                if (isSvg(i)) {
+                    if (svgFallback == null) svgFallback = logoUrlAt(i)
+                } else {
+                    return logoUrlAt(i)
+                }
+            }
+        }
+        if (svgFallback != null) return svgFallback
+    }
+
+    var enSvgFallback: String? = null
+    for (i in 0 until logos.length()) {
+        val logo = logos.optJSONObject(i) ?: continue
+        if (logo.optString("iso_639_1") == "en") {
+            if (isSvg(i)) {
+                if (enSvgFallback == null) enSvgFallback = logoUrlAt(i)
+            } else {
                 return logoUrlAt(i)
             }
         }
     }
+    if (enSvgFallback != null) return enSvgFallback
 
     for (i in 0 until logos.length()) {
-        val logo = logos.optJSONObject(i) ?: continue
-        if (logo.optString("iso_639_1") == "en") {
-            return logoUrlAt(i)
-        }
+        if (!isSvg(i)) return logoUrlAt(i)
     }
 
     return logoUrlAt(0)
@@ -2177,18 +2206,174 @@ private val QUALITY_REGEX_MAP = listOf(
     Regex("""\b720p?|720\b""", RegexOption.IGNORE_CASE)      to Qualities.P720.value,
     Regex("""\b480p?|480\b""", RegexOption.IGNORE_CASE)      to Qualities.P480.value
 )
-private var lastResolvedQuality: Int = Qualities.Unknown.value
+suspend fun getSessionAndCsrfforFlixindia(baseUrl: String): Pair<String, String>? {
+    val res = app.get(baseUrl)
 
-fun getQualityFromName(qualityName: String?): Int {
-    if (qualityName.isNullOrBlank())
-        return lastResolvedQuality
+    val sessionId = res.cookies["PHPSESSID"] ?: return null
 
-    for ((regex, quality) in QUALITY_REGEX_MAP) {
-        if (regex.containsMatchIn(qualityName)) {
-            lastResolvedQuality = maxOf(lastResolvedQuality, quality)
-            return lastResolvedQuality
+    val csrf = Regex(
+        """window\.CSRF_TOKEN\s*=\s*['"]([a-f0-9]{64})['"]"""
+    ).find(res.text)?.groupValues?.get(1) ?: return null
+
+    return sessionId to csrf
+}
+
+suspend fun getHindMoviezLinks(
+    source: String,
+    url: String,
+    callback: (ExtractorLink) -> Unit
+) {
+    val response = app.get(url)
+    val doc = response.document
+
+    val name = doc.selectFirst("div.container p:contains(Name:)")
+        ?.text()
+        ?.substringAfter("Name:")
+        ?.trim()
+        .orEmpty()
+
+    val fileSize = doc.selectFirst("div.container p:contains(Size:)")
+        ?.text()
+        ?.substringAfter("Size:")
+        ?.trim()
+        .orEmpty()
+
+    val extractedSpecs = buildExtractedTitle(extractSpecs(name))
+    val quality = getIndexQuality(name)
+
+    runAllAsync(
+
+        // Primary links
+        {
+            val redirectUrl = doc.selectFirst("a.btn-info")?.attr("href") ?: return@runAllAsync
+            val redirectDoc = app.get(redirectUrl, referer = response.url).document
+
+            redirectDoc.select("a.button").forEach { btn ->
+                callback(
+                    newExtractorLink(
+                        source,
+                        "$source $extractedSpecs[$fileSize]",
+                        btn.attr("href"),
+                        ExtractorLinkType.VIDEO
+                    ) {
+                        this.quality = quality
+                    }
+                )
+            }
+        },
+
+        // HCloud
+        {
+            val hCloudUrl = doc.selectFirst("a.btn-dark")?.attr("href") ?: return@runAllAsync
+
+            callback(
+                newExtractorLink(
+                    "$source[HCloud]",
+                    "$source[HCloud] $extractedSpecs[$fileSize]",
+                    hCloudUrl,
+                    ExtractorLinkType.VIDEO
+                ) {
+                    this.quality = quality
+                }
+            )
         }
+    )
+}
+
+fun buildExtractedTitle(extracted: Map<String, List<String>>): String {
+    val orderedCategories = listOf("quality", "codec", "audio", "hdr", "language")
+
+    val specs = orderedCategories
+        .flatMap { extracted[it] ?: emptyList() }
+        .distinct()
+        .joinToString(" ")
+
+    val size = extracted["size"]?.firstOrNull()
+
+    return if (size != null) {
+        "$specs [$size]"
+    } else {
+        specs
     }
-    return lastResolvedQuality
+}
+
+val SPEC_OPTIONS = mapOf(
+    "quality" to listOf(
+        mapOf("value" to "BluRay", "label" to "BluRay"),
+        mapOf("value" to "BluRay REMUX", "label" to "BluRay REMUX"),
+        mapOf("value" to "BRRip", "label" to "BRRip"),
+        mapOf("value" to "BDRip", "label" to "BDRip"),
+        mapOf("value" to "WEB-DL", "label" to "WEB-DL"),
+        mapOf("value" to "HDRip", "label" to "HDRip"),
+        mapOf("value" to "DVDRip", "label" to "DVDRip"),
+        mapOf("value" to "HDTV", "label" to "HDTV"),
+        mapOf("value" to "CAM", "label" to "CAM"),
+        mapOf("value" to "TeleSync", "label" to "TeleSync"),
+        mapOf("value" to "SCR", "label" to "SCR"),
+        mapOf("value" to "10bit", "label" to "10bit"),
+        mapOf("value" to "8bit", "label" to "8bit"),
+    ),
+    "codec" to listOf(
+        mapOf("value" to "x264", "label" to "x264"),
+        mapOf("value" to "x265", "label" to "x265 (HEVC)"),
+        mapOf("value" to "h.264", "label" to "H.264 (AVC)"),
+        mapOf("value" to "h.265", "label" to "H.265 (HEVC)"),
+        mapOf("value" to "hevc", "label" to "HEVC"),
+        mapOf("value" to "avc", "label" to "AVC"),
+        mapOf("value" to "mpeg-2", "label" to "MPEG-2"),
+        mapOf("value" to "mpeg-4", "label" to "MPEG-4"),
+        mapOf("value" to "vp9", "label" to "VP9")
+    ),
+    "audio" to listOf(
+        mapOf("value" to "AAC", "label" to "AAC"),
+        mapOf("value" to "AC3", "label" to "AC3 (Dolby Digital)"),
+        mapOf("value" to "DTS", "label" to "DTS"),
+        mapOf("value" to "DTS-HD MA", "label" to "DTS-HD MA"),
+        mapOf("value" to "TrueHD", "label" to "Dolby TrueHD"),
+        mapOf("value" to "Atmos", "label" to "Dolby Atmos"),
+        mapOf("value" to "DD+", "label" to "DD+"),
+        mapOf("value" to "Dolby Digital Plus", "label" to "Dolby Digital Plus"),
+        mapOf("value" to "DTS Lossless", "label" to "DTS Lossless")
+    ),
+    "hdr" to listOf(
+        mapOf("value" to "DV", "label" to "Dolby Vision"),
+        mapOf("value" to "HDR10+", "label" to "HDR10+"),
+        mapOf("value" to "HDR", "label" to "HDR"),
+        mapOf("value" to "SDR", "label" to "SDR")
+    ),
+    "language" to listOf(
+        mapOf("value" to "HIN", "label" to "Hindi🇮🇳"),
+        mapOf("value" to "Hindi", "label" to "Hindi🇮🇳"),
+        mapOf("value" to "Tamil", "label" to "Tamil🇮🇳"),
+        mapOf("value" to "ENG", "label" to "English🇺🇸"),
+        mapOf("value" to "English", "label" to "English🇺🇸"),
+        mapOf("value" to "Korean", "label" to "Korean🇰🇷"),
+        mapOf("value" to "KOR", "label" to "Korean🇰🇷"),
+        mapOf("value" to "Japanese", "label" to "Japanese🇯🇵"),
+        mapOf("value" to "Chinese", "label" to "Chinese🇨🇳"),
+        mapOf("value" to "Telugu", "label" to "Telugu🇮🇳"),
+    )
+)
+
+fun extractSpecs(inputString: String): Map<String, List<String>> {
+    val results = mutableMapOf<String, List<String>>()
+
+    SPEC_OPTIONS.forEach { (category, options) ->
+        val matches = options.filter { option ->
+            val value = option["value"] as String
+            val regexPattern = "\\b${Regex.escape(value)}\\b".toRegex(RegexOption.IGNORE_CASE)
+            regexPattern.containsMatchIn(inputString)
+        }.map { it["label"] as String }
+
+        results[category] = matches
+    }
+
+    val fileSizeRegex = """(\d+(?:\.\d+)?\s?(?:MB|GB))""".toRegex(RegexOption.IGNORE_CASE)
+    val sizeMatch = fileSizeRegex.find(inputString)
+    if (sizeMatch != null) {
+        results["size"] = listOf(sizeMatch.groupValues[1])
+    }
+
+    return results.toMap()
 }
 

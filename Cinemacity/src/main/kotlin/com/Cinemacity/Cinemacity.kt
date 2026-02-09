@@ -1,5 +1,6 @@
 package com.Cinemacity
 
+import android.util.Log
 import com.google.gson.Gson
 import com.lagradost.cloudstream3.Actor
 import com.lagradost.cloudstream3.ActorData
@@ -44,7 +45,7 @@ class Cinemacity : MainAPI() {
     override var name = "CinemaCity"
     override var lang = "en"
     override val hasMainPage = true
-    override val hasDownloadSupport = true
+    override val hasDownloadSupport = false
     override val hasQuickSearch = false
     override val supportedTypes = setOf(
         TvType.Movie, TvType.TvSeries
@@ -55,7 +56,7 @@ class Cinemacity : MainAPI() {
             "Cookie" to base64Decode("ZGxlX3VzZXJfaWQ9MzI3Mjk7IGRsZV9wYXNzd29yZD04OTQxNzFjNmE4ZGFiMThlZTU5NGQ1YzY1MjAwOWEzNTs=")
         )
         private const val TMDBIMAGEBASEURL = "https://image.tmdb.org/t/p/original"
-        private const val cinemeta_url = "https://v3-cinemeta.strem.io/meta"
+        private const val cinemeta_url = "https://aiometadata.elfhosted.com/stremio/b7cb164b-074b-41d5-b458-b3a834e197bb/meta"
     }
 
     fun parseCredits(jsonText: String?): List<ActorData> {
@@ -161,7 +162,7 @@ class Cinemacity : MainAPI() {
         }
 
         val year = ogTitle.substringAfter("(", "").substringBefore(")").toIntOrNull()
-        val contenttype = doc.select("div.dar-full_meta > span:nth-child(5) > a").text()
+        var contenttype = doc.select("div.dar-full_meta > span:nth-child(5) > a").text()
 
         val tvtype = if (url.contains("/movies/", true)) TvType.Movie else TvType.TvSeries
         val tmdbmetatype = if (tvtype == TvType.TvSeries) "tv" else "movie"
@@ -215,10 +216,10 @@ class Cinemacity : MainAPI() {
         responseData?.meta?.let {
             description = it.description ?: descriptions
             background = it.background ?: poster
-            genre = it.genre
+            genre = it.genres
         }
 
-        val epMetaMap: Map<String, EpisodeDetails> =
+        val epMetaMap: Map<String, ResponseData.Meta.EpisodeDetails> =
             responseData?.meta?.videos
                 ?.filter { it.season != null && it.episode != null }
                 ?.associateBy { "${it.season}:${it.episode}" }
@@ -244,7 +245,7 @@ class Cinemacity : MainAPI() {
         )
 
 
-        /* ---------------- SAFE file parsing (FIX) ---------------- */
+        /* ---------------- SAFE file parsing ---------------- */
 
         val rawFile = playerJson.opt("file")
             ?: error("PlayerJS: missing file field")
@@ -320,8 +321,22 @@ class Cinemacity : MainAPI() {
                         ?.groupValues?.get(1)?.toIntOrNull()
                         ?: continue
 
-                    val fileUrl = epJson.optString("file")
-                    if (fileUrl.isBlank()) continue
+                    val streamUrls = mutableListOf<String>()
+
+                    epJson.optString("file")
+                        .takeIf { it.isNotBlank() }
+                        ?.let { streamUrls += it }
+
+                    epJson.optJSONArray("folder")?.let { sources ->
+                        for (k in 0 until sources.length()) {
+                            sources.optJSONObject(k)
+                                ?.optString("file")
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let { streamUrls += it }
+                        }
+                    }
+
+                    if (streamUrls.isEmpty()) continue
 
                     val metaKey = "$seasonNumber:$episodeNumber"
                     val epMeta = epMetaMap[metaKey]
@@ -330,14 +345,14 @@ class Cinemacity : MainAPI() {
                         parseSubtitles(epJson.optString("subtitle"))
 
                     val epjson = JSONObject().apply {
-                        put("streamUrl", fileUrl)
+                        put("streams", JSONArray(streamUrls))
                         put("subtitleTracks", epSubtitleTracks)
                     }.toString()
 
                     episodeList += newEpisode(epjson) {
                         this.season = seasonNumber
                         this.episode = episodeNumber
-                        this.name = epMeta?.title ?: epMeta?.name ?: "S${seasonNumber}E${episodeNumber}"
+                        this.name = epMeta?.title ?: "S${seasonNumber}E${episodeNumber}"
                         this.description = epMeta?.overview
                         this.posterUrl = epMeta?.thumbnail
                         addDate(epMeta?.released)
@@ -364,13 +379,15 @@ class Cinemacity : MainAPI() {
                 this.recommendations = recommendation
                 this.tags = genre
                 this.actors = castList
-                this.contentRating = contenttype
                 this.score = Score.from10(responseData?.meta?.imdbRating)
+                this.contentRating = responseData?.meta?.appExtras?.certification
                 addImdbId(imdbId)
                 addTMDbId(tmdbId)
                 addTrailer(trailer)
             }
         }
+
+        responseData?.meta?.appExtras?.certification?.let { Log.d("Phisher", it) }
 
         return newMovieLoadResponse(
             responseData?.meta?.name ?: title,
@@ -392,7 +409,7 @@ class Cinemacity : MainAPI() {
             this.recommendations = recommendation
             this.tags = genre
             this.actors = castList
-            this.contentRating = contenttype
+            this.contentRating = responseData?.meta?.appExtras?.certification
             this.score = Score.from10(responseData?.meta?.imdbRating)
             addImdbId(imdbId)
             addTMDbId(tmdbId)
@@ -406,8 +423,8 @@ class Cinemacity : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+
         val obj = JSONObject(data)
-        val streamUrl = obj.getString("streamUrl")
 
         obj.optJSONArray("subtitleTracks")?.let { subs ->
             for (i in 0 until subs.length()) {
@@ -421,20 +438,41 @@ class Cinemacity : MainAPI() {
             }
         }
 
-        callback.invoke(
-            newExtractorLink(
-                name,
-                name,
-                streamUrl,
-                INFER_TYPE
-            ) {
-                referer = mainUrl
-                quality = extractQuality(streamUrl)
+        val streamUrls = mutableListOf<String>()
+
+        obj.optJSONArray("streams")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                arr.optString(i)
+                    .takeIf { it.isNotBlank() }
+                    ?.let { streamUrls += it }
             }
-        )
+        }
+
+        if (streamUrls.isEmpty()) {
+            obj.optString("streamUrl")
+                .takeIf { it.isNotBlank() }
+                ?.let { streamUrls += it }
+        }
+
+        if (streamUrls.isEmpty()) return false
+
+        streamUrls.forEach { url ->
+            callback(
+                newExtractorLink(
+                    name,
+                    name,
+                    url,
+                    INFER_TYPE
+                ) {
+                    referer = mainUrl
+                    quality = extractQuality(url)
+                }
+            )
+        }
 
         return true
     }
+
 
     fun extractQuality(url: String): Int {
         return when {

@@ -1,0 +1,60 @@
+name: Build Cloudstream Extension (DEX)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Grant execute permission
+        run: chmod +x gradlew
+
+      - name: Create local.properties
+        run: echo "sdk.dir=/tmp" > local.properties
+
+      - name: Build  extension
+        run: ./gradlew :IPTVPlayer:assembleRelease
+
+      - name: Install tools
+        run: |
+          sudo apt update
+          sudo apt install -y unzip wget
+          wget https://dl.google.com/android/repository/build-tools_r33.0.2-linux.zip
+          unzip build-tools_r33.0.2-linux.zip
+
+      - name: Convert AAR to DEX
+        run: |
+          mkdir -p output
+          AAR=$(find Anichi -name "*.aar" | head -n 1)
+          echo "Using AAR: $AAR"
+          unzip "$AAR" -d aar
+          unzip aar/classes.jar -d classes
+          build-tools/android-13/d8 classes --output output
+
+      - name: Upload DEX
+        uses: actions/upload-artifact@v4
+        with:
+          name: Anichi-dex
+          path: output/classes.dex          mkdir -p output
+          AAR=$(find . -name "*.aar" | head -n 1)
+          echo "Using AAR: $AAR"
+          unzip "$AAR" -d aar
+          unzip aar/classes.jar -d classes
+          build-tools/android-13/d8 classes --output output
+
+      - name: Upload DEX
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-dex
+          path: output/classes.dex

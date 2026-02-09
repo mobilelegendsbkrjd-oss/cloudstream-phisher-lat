@@ -1,5 +1,5 @@
 // use an integer for version numbers
-version = 23
+version = 26
 
 
 cloudstream {
@@ -29,6 +29,6 @@ cloudstream {
         "Cartoon",
         "AnimeMovie"
     )
-    iconUrl = "https://xdmovies.site/assets/logo1.png"
+    iconUrl = "https://new.xdmovies.wtf/assets/logo1.png"
     isCrossPlatform = true
 }

@@ -7,7 +7,6 @@ import com.lagradost.cloudstream3.HomePageList
 import com.lagradost.cloudstream3.HomePageResponse
 import com.lagradost.cloudstream3.LoadResponse
 import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId
-import com.lagradost.cloudstream3.LoadResponse.Companion.addSimklId
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.MainPageRequest
 import com.lagradost.cloudstream3.Score
@@ -35,7 +34,7 @@ import org.json.JSONObject
 import org.jsoup.nodes.Element
 
 class XDMovies : MainAPI() {
-    override var mainUrl = "https://xdmovies.site"
+    override var mainUrl = "https://new.xdmovies.wtf"
     override var name = "XD Movies"
     override val hasMainPage = true
     override var lang = "en"
@@ -45,7 +44,6 @@ class XDMovies : MainAPI() {
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
 
     companion object {
-        private const val SIMKL = "https://api.simkl.com"
         val headers = mapOf(
             "x-auth-token" to base64Decode("NzI5N3Nra2loa2Fqd25zZ2FrbGFrc2h1d2Q="),
             "x-requested-with" to "XMLHttpRequest"
@@ -88,9 +86,8 @@ class XDMovies : MainAPI() {
         return newHomePageResponse(
             list = HomePageList(
                 name = request.name,
-                list = home,
-                isHorizontalImages = false
-            ),
+                list = home
+                ),
             hasNext = true
         )
     }
@@ -99,17 +96,32 @@ class XDMovies : MainAPI() {
         val title = this.safeText("h3")
         val href = fixUrl(this.attr("href"))
         val posterUrl = fixUrlNull(this.safeAttr("img", "src"))
+        val quality = this.selectFirst("div.quality-badge")?.ownText()
         return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = posterUrl
+            this.quality = getSearchQuality(quality)
         }
     }
+
+
+    private fun highestQuality(qualities: List<String>): String? {
+        return qualities
+            .mapNotNull { q ->
+                q.filter { it.isDigit() }.toIntOrNull()?.let { res -> res to q }
+            }
+            .maxByOrNull { it.first }
+            ?.second
+    }
+
 
     private fun SearchData.SearchDataItem.toSearchResult(): SearchResponse {
         val isTv = type.equals("tv", ignoreCase = true) || type.equals("series", ignoreCase = true)
         val tvType = if (isTv) TvType.TvSeries else TvType.Movie
         val url = mainUrl + path
+        val bestQuality = highestQuality(qualities)
         return newMovieSearchResponse(title, url, tvType) {
             this.posterUrl = TMDBIMAGEBASEURL + poster
+            this.quality = getSearchQuality(bestQuality)
         }
     }
 
@@ -133,14 +145,14 @@ class XDMovies : MainAPI() {
         val title = infoDiv?.safeText("h2").orEmpty()
         val poster = detailsWrapper?.selectFirst("img")?.attr("src").orEmpty()
         val backgroundPoster = headerStyle.substringAfter("url('").substringBefore("');")
-        val tags = document.select("p:contains(Genres:) a").map { it.text().trim() }
+        val audios = document.select("span.neon-audio").text().split(",").map { it.trim() }
+        val tags = (document.select("p:contains(Genres:)").first()?.ownText()?.split(",")?.map { it.trim() } ?: emptyList()) + audios
         val firstAirDate = document.select("p:contains(First Air Date:)").text().removePrefix("First Air Date:").trim()
         val year = firstAirDate.substringBefore("-").toIntOrNull()
         val description = document.select("p.overview").text()
         val rating = Score.from10(document.select("p:contains(Rating:)").text().removePrefix("Rating:").trim().substringBefore("/").trim())
         val contentType = url.substringAfter("$mainUrl/").substringBefore("/")
         val source = document.select("#source-info span").text()
-
         val tvType = when {
             contentType.equals("anime", ignoreCase = true) -> TvType.Anime
             contentType.equals("tv", ignoreCase = true) || contentType.equals("series", ignoreCase = true) -> TvType.TvSeries
@@ -181,15 +193,6 @@ class XDMovies : MainAPI() {
                 }
             }
             ?: emptyList()
-
-        val simklid = runCatching {
-            tmdbRes?.imdbId?.takeIf { it.isNotBlank() }?.let { imdb ->
-                val path = if (tvType == TvType.Movie) "movies" else "tv"
-                val simklJson = JSONObject(app.get("$SIMKL/$path/$imdb?client_id=${com.lagradost.cloudstream3.BuildConfig.SIMKL_CLIENT_ID}").text)
-                simklJson.optJSONObject("ids")?.optInt("simkl")?.takeIf { it != 0 }
-            }
-        }.getOrNull()
-
 
         val logoUrl = fetchTmdbLogoUrl(
             tmdbAPI = "https://api.themoviedb.org/3",
@@ -297,13 +300,11 @@ class XDMovies : MainAPI() {
                 try { this.logoUrl = logoUrl } catch(_:Throwable){}
                 this.year = year
                 this.plot = description
-                this.tags = tags
+                this.tags = tags.ifEmpty { genres }
                 this.score = rating
                 this.contentRating = source
                 this.actors=actors
-                this.tags = genres
                 addImdbId(imdbId)
-                addSimklId(simklid)
             }
         }
 
@@ -313,13 +314,11 @@ class XDMovies : MainAPI() {
             try { this.logoUrl = logoUrl } catch(_:Throwable){}
             this.year = year
             this.plot = description
-            this.tags = tags
+            this.tags = tags.ifEmpty { genres }
             this.score = rating
             this.contentRating = source
             this.actors=actors
-            this.tags = genres
             addImdbId(imdbId)
-            addSimklId(simklid)
         }
     }
 

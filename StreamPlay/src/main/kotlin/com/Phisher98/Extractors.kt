@@ -33,6 +33,7 @@ import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
 import com.phisher98.StreamPlay.Companion.animepaheAPI
+import kotlinx.coroutines.runBlocking
 import okhttp3.FormBody
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
@@ -257,7 +258,7 @@ class VCloudGDirect : ExtractorApi() {
 
 class VCloud : ExtractorApi() {
     override val name: String = "V-Cloud"
-    override val mainUrl: String = "https://vcloud.*"
+    override val mainUrl: String = "https://vcloud.zip"
     override val requiresReferer = false
 
     override suspend fun getUrl(
@@ -350,6 +351,7 @@ class VCloud : ExtractorApi() {
                     )
                 }
 
+                /*
                 text.contains("10Gbps", ignoreCase = true) -> {
                     var currentLink = link
                     var redirectUrl: String?
@@ -373,6 +375,7 @@ class VCloud : ExtractorApi() {
                         ) { this.quality = quality }
                     )
                 }
+                */
 
                 text.contains("S3 Server", ignoreCase = true) -> {
                     callback.invoke(
@@ -399,6 +402,54 @@ class VCloud : ExtractorApi() {
                 }
             }
         }
+    }
+
+    private fun cleanTitle(title: String): String {
+
+        val name = title.replace(Regex("\\.[a-zA-Z0-9]{2,4}$"), "")
+
+        val normalized = name
+            .replace(Regex("WEB[-_. ]?DL", RegexOption.IGNORE_CASE), "WEB-DL")
+            .replace(Regex("WEB[-_. ]?RIP", RegexOption.IGNORE_CASE), "WEBRIP")
+            .replace(Regex("H[ .]?265", RegexOption.IGNORE_CASE), "H265")
+            .replace(Regex("H[ .]?264", RegexOption.IGNORE_CASE), "H264")
+            .replace(Regex("DDP[ .]?([0-9]\\.[0-9])", RegexOption.IGNORE_CASE), "DDP$1")
+
+        val parts = normalized.split(" ", "_", ".")
+
+        val sourceTags = setOf(
+            "WEB-DL", "WEBRIP", "BLURAY", "HDRIP",
+            "DVDRIP", "HDTV", "CAM", "TS", "BRRIP", "BDRIP"
+        )
+
+        val codecTags = setOf("H264", "H265", "X264", "X265", "HEVC", "AVC")
+
+        val audioTags = setOf("AAC", "AC3", "DTS", "MP3", "FLAC", "DD", "DDP", "EAC3")
+
+        val audioExtras = setOf("ATMOS")
+
+        val hdrTags = setOf("SDR","HDR", "HDR10", "HDR10+", "DV", "DOLBYVISION")
+
+        val filtered = parts.mapNotNull { part ->
+            val p = part.uppercase()
+
+            when {
+                sourceTags.contains(p) -> p
+                codecTags.contains(p) -> p
+                audioTags.any { p.startsWith(it) } -> p
+                audioExtras.contains(p) -> p
+                hdrTags.contains(p) -> {
+                    when (p) {
+                        "DV", "DOLBYVISION" -> "DOLBYVISION"
+                        else -> p
+                    }
+                }
+                p == "NF" || p == "CR" -> p
+                else -> null
+            }
+        }
+
+        return filtered.distinct().joinToString(" ")
     }
 
     private fun getIndexQuality(str: String?): Int {
@@ -703,6 +754,14 @@ class MixDropSi : MixDrop(){
     override var mainUrl = "https://mixdrop.si"
 }
 
+class mixdrop21 : MixDrop(){
+    override var mainUrl = "https://mixdrop21.net"
+}
+
+class m1xdrop : MixDrop(){
+    override var mainUrl = "https://m1xdrop.net"
+}
+
 class MixDropPs : MixDrop(){
     override var mainUrl = "https://mixdrop.ps"
 }
@@ -915,7 +974,9 @@ open class PixelDrain : ExtractorApi() {
 class HubCloud : ExtractorApi() {
 
     override val name = "Hub-Cloud"
-    override val mainUrl = "https://hubcloud.*"
+    override var mainUrl: String = runBlocking {
+        StreamPlay.getDomains()?.hubcloud ?: "https://hubcloud.foo"
+    }
     override val requiresReferer = false
 
     override suspend fun getUrl(
@@ -1055,6 +1116,7 @@ class HubCloud : ExtractorApi() {
                     )
                 }
 
+                /*
                 "10gbps" in label -> {
                     var current = link
 
@@ -1076,6 +1138,7 @@ class HubCloud : ExtractorApi() {
 
                     Log.e(tag, "10Gbps: Redirect limit reached")
                 }
+                */
 
                 else -> {
                     loadExtractor(link, "", subtitleCallback, callback)
@@ -1100,37 +1163,51 @@ class HubCloud : ExtractorApi() {
     }
 
     private fun cleanTitle(title: String): String {
-        val parts = title.split(".", "-", "_")
 
-        val qualityTags = listOf(
-            "WEBRip", "WEB-DL", "WEB", "BluRay", "HDRip", "DVDRip", "HDTV",
-            "CAM", "TS", "R5", "DVDScr", "BRRip", "BDRip", "DVD", "PDTV", "HD"
+        val name = title.replace(Regex("\\.[a-zA-Z0-9]{2,4}$"), "")
+
+        val normalized = name
+            .replace(Regex("WEB[-_. ]?DL", RegexOption.IGNORE_CASE), "WEB-DL")
+            .replace(Regex("WEB[-_. ]?RIP", RegexOption.IGNORE_CASE), "WEBRIP")
+            .replace(Regex("H[ .]?265", RegexOption.IGNORE_CASE), "H265")
+            .replace(Regex("H[ .]?264", RegexOption.IGNORE_CASE), "H264")
+            .replace(Regex("DDP[ .]?([0-9]\\.[0-9])", RegexOption.IGNORE_CASE), "DDP$1")
+
+        val parts = normalized.split(" ", "_", ".")
+
+        val sourceTags = setOf(
+            "WEB-DL", "WEBRIP", "BLURAY", "HDRIP",
+            "DVDRIP", "HDTV", "CAM", "TS", "BRRIP", "BDRIP"
         )
 
-        val audioTags = listOf("AAC", "AC3", "DTS", "MP3", "FLAC", "DD5", "EAC3", "Atmos")
-        val subTags = listOf("ESub", "ESubs", "Subs", "MultiSub", "NoSub", "EnglishSub", "HindiSub")
-        val codecTags = listOf("x264", "x265", "H264", "HEVC", "AVC")
+        val codecTags = setOf("H264", "H265", "X264", "X265", "HEVC", "AVC")
 
-        val startIndex = parts.indexOfFirst { part ->
-            qualityTags.any { part.contains(it, true) }
+        val audioTags = setOf("AAC", "AC3", "DTS", "MP3", "FLAC", "DD", "DDP", "EAC3")
+
+        val audioExtras = setOf("ATMOS")
+
+        val hdrTags = setOf("SDR","HDR", "HDR10", "HDR10+", "DV", "DOLBYVISION")
+
+        val filtered = parts.mapNotNull { part ->
+            val p = part.uppercase()
+
+            when {
+                sourceTags.contains(p) -> p
+                codecTags.contains(p) -> p
+                audioTags.any { p.startsWith(it) } -> p
+                audioExtras.contains(p) -> p
+                hdrTags.contains(p) -> {
+                    when (p) {
+                        "DV", "DOLBYVISION" -> "DOLBYVISION"
+                        else -> p
+                    }
+                }
+                p == "NF" || p == "CR" -> p
+                else -> null
+            }
         }
 
-        val endIndex = parts.indexOfLast { part ->
-            subTags.any { part.contains(it, true) } ||
-                    audioTags.any { part.contains(it, true) } ||
-                    codecTags.any { part.contains(it, true) }
-        }
-
-        return when {
-            startIndex != -1 && endIndex != -1 && endIndex >= startIndex ->
-                parts.subList(startIndex, endIndex + 1).joinToString(".")
-
-            startIndex != -1 ->
-                parts.subList(startIndex, parts.size).joinToString(".")
-
-            else ->
-                parts.takeLast(3).joinToString(".")
-        }
+        return filtered.distinct().joinToString(" ")
     }
 }
 
@@ -1520,7 +1597,7 @@ open class Embtaku : ExtractorApi() {
         val serverRes = responsecode.documentLarge
         serverRes.select("ul.list-server-items").amap {
             val href=it.attr("data-video")
-            loadSourceNameExtractor("Anichi","Anichi [Embtaku]",href,"",subtitleCallback,callback)
+            loadSourceNameExtractor("Anichi",href,"",subtitleCallback,callback)
         }
     }
 }
@@ -1645,7 +1722,7 @@ open class MegaUp : ExtractorApi() {
         val encodedResult = app.get(mediaUrl, headers = HEADERS)
         .parsedSafe<AnimeKaiResponse>()
         ?.result
-
+        val displayName = referer ?: this.name
         if (encodedResult == null) return
 
         val body = """
@@ -1682,7 +1759,7 @@ open class MegaUp : ExtractorApi() {
                     }
                 }
                 if (m3u8File != null) {
-                    generateM3u8(name, m3u8File, mainUrl).forEach(callback)
+                    generateM3u8(displayName, m3u8File, mainUrl).forEach(callback)
                 } else {
                     Log.d("Error:", "No 'file' found in first source")
                 }
@@ -2534,7 +2611,7 @@ class BuzzServer : ExtractorApi() {
     ) {
         try {
             val qualityText = app.get(url).documentLarge.selectFirst("div.max-w-2xl > span")?.text()
-            val quality = getQualityFromName(qualityText)
+            val quality = getIndexQuality(qualityText)
             val response = app.get("$url/download", referer = url, allowRedirects = false)
             val redirectUrl = response.headers["hx-redirect"] ?: ""
 
@@ -2558,6 +2635,10 @@ class BuzzServer : ExtractorApi() {
 }
 class StreamwishHG : StreamWishExtractor() {
     override val mainUrl = "https://hglink.to"
+}
+
+class StreamwishTO : StreamWishExtractor() {
+    override val mainUrl = "https://streamwish.to"
 }
 
 
@@ -2887,7 +2968,7 @@ open class Krakenfiles : ExtractorApi() {
         val doc = app.get("$mainUrl/embed-video/$id").document
         val title = doc.select("span.coin-name").text()
         val link = doc.selectFirst("source")?.attr("src") ?: return
-        val quality = getQualityFromName(title)
+        val quality = getIndexQuality(title)
 
 
         callback.invoke(

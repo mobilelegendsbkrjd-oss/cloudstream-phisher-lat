@@ -49,31 +49,49 @@ class StremioC(override var mainUrl: String, override var name: String) : MainAP
     override val hasMainPage = true
 
     companion object {
+        private const val cinemeta = "https://aiometadata.elfhosted.com/stremio/b7cb164b-074b-41d5-b458-b3a834e197bb"
         val TRACKER_LIST_URLS = listOf(
             "https://raw.githubusercontent.com/ngosang/trackerslist/refs/heads/master/trackers_best.txt",
             "https://raw.githubusercontent.com/ngosang/trackerslist/refs/heads/master/trackers_best_ip.txt",
         )
-        private const val cinemataUrl = "https://v3-cinemeta.strem.io"
         private const val TRACKER_LIST_URL = "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best.txt"
     }
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+    override suspend fun getMainPage(
+        page: Int,
+        request: MainPageRequest
+    ): HomePageResponse {
         if (mainUrl.isEmpty()) {
             throw IllegalArgumentException("Configure in Extension Settings\n")
         }
         mainUrl = mainUrl.fixSourceUrl()
-        val res = app.get("${mainUrl}/manifest.json").parsedSafe<Manifest>()
+
+        val pageSize = 100
+        val skip = (page - 1) * pageSize
+
+        val manifest = app
+            .get("$mainUrl/manifest.json")
+            .parsedSafe<Manifest>()
+
         val lists = mutableListOf<HomePageList>()
-        res?.catalogs?.amap { catalog ->
-            catalog.toHomePageList(this).let {
-                if (it.list.isNotEmpty()) lists.add(it)
+
+        manifest?.catalogs?.amap { catalog ->
+            catalog.toHomePageList(
+                provider = this,
+                skip = skip
+            ).let {
+                if (it.list.isNotEmpty()) {
+                    lists.add(it)
+                }
             }
         }
+
         return newHomePageResponse(
             lists,
-            false
+            hasNext = true
         )
     }
+
 
     override suspend fun search(query: String): List<SearchResponse> {
         mainUrl = mainUrl.fixSourceUrl()
@@ -94,22 +112,25 @@ class StremioC(override var mainUrl: String, override var name: String) : MainAP
             parseJson(metaJson)
         }
 
-        mainUrl =
-            if ((res.type == "movie" || res.type == "series") && isImdborTmdb(res.id))
-                cinemataUrl
-            else
-                mainUrl
-
         val encodedId = URLEncoder.encode(res.id, "UTF-8")
 
-        val response = app.get("${mainUrl}/meta/${res.type}/$encodedId.json")
+        val response = app.get("$mainUrl/meta/${res.type}/$encodedId.json")
             .parsedSafe<CatalogResponse>()
             ?: throw RuntimeException("Failed to load meta")
 
         val entry = response.meta
             ?: response.metas?.firstOrNull { it.id == res.id }
             ?: response.metas?.firstOrNull()
-            ?: throw RuntimeException("Meta not found")
+            ?: run {
+                val fallback = app.get(
+                    "$cinemeta/meta/${res.type}/$encodedId.json",
+                    timeout = 120L
+                ).parsedSafe<CatalogResponse>()
+
+                fallback?.meta
+                    ?: fallback?.metas?.firstOrNull()
+                    ?: throw RuntimeException("Meta not found (primary + fallback)")
+            }
 
         return entry.toLoadResponse(this, res.id)
     }
@@ -122,14 +143,18 @@ class StremioC(override var mainUrl: String, override var name: String) : MainAP
     ): Boolean {
         val loadData = parseJson<LoadData>(data)
         val encodedId = URLEncoder.encode(loadData.id, "UTF-8")
-
         val request = app.get(
             "${mainUrl}/stream/${loadData.type}/$encodedId.json",
             timeout = 120L
         )
-        if (request.isSuccessful) {
-            val res = request.parsedSafe<StreamsResponse>()
-            res?.streams?.forEach { stream ->
+
+        val res = if (request.isSuccessful)
+            request.parsedSafe<StreamsResponse>()
+        else
+            null
+
+        if (!res?.streams.isNullOrEmpty()) {
+            res.streams.forEach { stream ->
                 stream.runCallback(subtitleCallback, callback)
             }
         } else {
@@ -207,6 +232,11 @@ class StremioC(override var mainUrl: String, override var name: String) : MainAP
         return imdbUrlToIdNullable(url) != null || url?.startsWith("tmdb:") == true
     }
 
+    private fun isImdb(url: String?): Boolean {
+        return imdbUrlToIdNullable(url) != null
+    }
+
+
     private data class Manifest(val catalogs: List<Catalog>)
     private data class Catalog(
         var name: String?,
@@ -232,20 +262,34 @@ class StremioC(override var mainUrl: String, override var name: String) : MainAP
             return entries
         }
 
-        suspend fun toHomePageList(provider: StremioC): HomePageList {
-            val entries = mutableListOf<SearchResponse>()
+        suspend fun toHomePageList(
+            provider: StremioC,
+            skip: Int
+        ): HomePageList {
+            val entries = mutableMapOf<String, SearchResponse>()
+
             types.forEach { type ->
+                val url = if (skip > 0) {
+                    "${provider.mainUrl}/catalog/$type/$id/skip=$skip.json"
+                } else {
+                    "${provider.mainUrl}/catalog/$type/$id.json"
+                }
+
                 val res = app.get(
-                    "${provider.mainUrl}/catalog/${type}/${id}.json",
+                    url,
                     timeout = 120L
                 ).parsedSafe<CatalogResponse>()
+
                 res?.metas?.forEach { entry ->
-                    entries.add(entry.toSearchResponse(provider))
+                    if (!entries.containsKey(entry.id)) {
+                        entries[entry.id] = entry.toSearchResponse(provider)
+                    }
                 }
             }
+
             return HomePageList(
                 name ?: id,
-                entries
+                entries.values.toList()
             )
         }
     }
@@ -274,7 +318,7 @@ class StremioC(override var mainUrl: String, override var name: String) : MainAP
     ) {
         fun toSearchResponse(provider: StremioC): SearchResponse {
             return provider.newMovieSearchResponse(
-                fixTitle(name),
+                name,
                 this.toJson(),
                 TvType.Others
             ) {
@@ -317,7 +361,7 @@ class StremioC(override var mainUrl: String, override var name: String) : MainAP
                     tags = genre ?: genres
                     addActors(cast)
                     addTrailer(trailersSources.map { "https://www.youtube.com/watch?v=${it.source}" }
-                        ?.randomOrNull())
+                        .randomOrNull())
                     addImdbId(imdbId)
                 }
             }

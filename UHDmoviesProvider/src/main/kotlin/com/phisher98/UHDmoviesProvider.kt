@@ -1,6 +1,7 @@
 package com.phisher98
 
 
+import android.util.Log
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import org.json.JSONObject
@@ -108,7 +109,9 @@ class UHDmoviesProvider : MainAPI() { // all providers must be an instance of Ma
         val titleRaw = doc.select("div.gridlove-content div.entry-header h1.entry-title").text().trim().removePrefix("Download ")
         val titleRegex = Regex("(^.*\\)\\d*)")
         val title = titleRegex.find(titleRaw)?.groupValues?.get(1)?.trim()?.substringBefore("(")?.substringBefore("Season")?.substringBefore("S0") ?: titleRaw.substringBefore("(").substringBefore("Season").substringBefore("S0")
-        val poster = fixUrlNull(doc.selectFirst("div.entry-content  p  img")?.attr("src"))
+        val img = doc.selectFirst("div.entry-content > p img")
+        val poster = img?.attr("src")
+        val collectionposter = doc.select("meta[property=og:image]").attr("content")
         val yearRegex = Regex("(?<=\\()[\\d(\\]]+(?!=\\))")
         val year = yearRegex.find(titleRaw)?.value?.toIntOrNull()
         val tags = doc.select("div.entry-category > a.gridlove-cat").map { it.text() }
@@ -133,7 +136,6 @@ class UHDmoviesProvider : MainAPI() { // all providers must be an instance of Ma
         }
 
         return if (type == TvType.TvSeries) {
-            val episodes = mutableListOf<Episode>()
             var pTags = doc.select("p:has(a:contains(Episode))")
             if (pTags.isEmpty())
             {
@@ -213,14 +215,14 @@ class UHDmoviesProvider : MainAPI() { // all providers must be an instance of Ma
             }
 
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, tvSeriesEpisodes) {
-                this.posterUrl = poster ?. trim()
+                this.posterUrl = poster?.trim() ?: collectionposter
                 this.year = year
                 this.tags = tags
                 addTrailer(trailer)
                 addImdbId(ids.imdbId)
                 addTMDbId(ids.tmdbId.toString())
                 addSimklId(simklId)
-                this.backgroundPosterUrl = Background
+                this.backgroundPosterUrl = Background ?: collectionposter
                 this.plot = Description
                 this.year = year
                 this.tags = tags
@@ -237,15 +239,16 @@ class UHDmoviesProvider : MainAPI() { // all providers must be an instance of Ma
                     it.nextElementSibling()?.select("a.maxbutton-1")?.attr("href") ?: ""
                 )
             }
+            Log.d("Phisher","$poster $collectionposter $Background")
             newMovieLoadResponse(title, url, TvType.Movie, data) {
-                this.posterUrl = poster?.trim()
+                this.posterUrl = poster?.trim() ?: collectionposter
                 this.year = year
                 this.tags = tags
                 addTrailer(trailer)
                 addImdbId(ids.imdbId)
                 addTMDbId(ids.tmdbId.toString())
                 addSimklId(simklId)
-                this.backgroundPosterUrl = Background
+                this.backgroundPosterUrl = Background ?: collectionposter
                 this.plot = Description
                 this.year = year
                 this.tags = tags
@@ -336,7 +339,7 @@ private suspend fun fetchMetaData(imdbId: String?, type: TvType): JsonNode? {
     if (imdbId.isNullOrBlank()) return null
 
     val metaType = if (type == TvType.TvSeries) "series" else "movie"
-    val url = "https://v3-cinemeta.strem.io/meta/$metaType/$imdbId.json"
+    val url = "https://aiometadata.elfhosted.com/stremio/b7cb164b-074b-41d5-b458-b3a834e197bb/meta/$metaType/$imdbId.json"
 
     return try {
         val resp = app.get(url).text
