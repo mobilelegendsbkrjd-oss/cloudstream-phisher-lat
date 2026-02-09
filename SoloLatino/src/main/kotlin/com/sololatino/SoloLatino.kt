@@ -47,7 +47,7 @@ class SoloLatino : MainAPI() {
                 else -> TvType.TvSeries
             }
 
-            val home = if (name == "🔥 Sagas" || name == "📚 Series Curadas") {
+            val home = if (name == "🔥 Sagas" || name == "📚 Categorias (solo TV)") {
                 try {
                     val jsonText = app.get(url, timeout = 20).text.trim()
                     val sagas = mutableListOf<SearchResponse>()
@@ -125,40 +125,66 @@ class SoloLatino : MainAPI() {
 
             val isSeriesCurada = url.contains(seriesCuradasJsonUrl)
 
-            val sagaItems = doc.select("div#archive-content article.item").mapIndexedNotNull { index, it ->
-                val epurl = it.selectFirst("a")?.attr("href") ?: return@mapIndexedNotNull null
-                val epTitle = it.selectFirst("h3")?.text()?.trim() ?: "Parte ${index + 1}"
-                val epYear = it.selectFirst(".data p")?.text()?.trim()
+            // Primero recolectamos todos los ítems con su información
+            val sagaItems = doc.select("div#archive-content article.item").mapNotNull { it ->
+                val epurl = it.selectFirst("a")?.attr("href") ?: return@mapNotNull null
+                val epTitle = it.selectFirst("h3")?.text()?.trim() ?: ""
+                val epYearText = it.selectFirst(".data p")?.text()?.trim() ?: ""
                 var realimg: String? = it.selectFirst("div.poster img")?.attr("data-srcset")
                 if (realimg.isNullOrBlank()) realimg = it.selectFirst("img")?.attr("data-src")
 
+                // Extraer el año del texto (generalmente está al final entre paréntesis o solo)
+                val yearMatch = Regex("""(\d{4})""").find(epYearText)
+                val epYear = yearMatch?.value?.toIntOrNull() ?: 0
+
                 val isMovie = epurl.contains("/peliculas/") || epurl.contains("/episodios/")
 
-                if (isMovie) {
-                    newEpisode(epurl) {
-                        name = epTitle + if (epYear != null) " ($epYear)" else ""
-                        posterUrl = realimg
-                    }
-                } else {
-                    newTvSeriesSearchResponse(epTitle, epurl, TvType.TvSeries) {
-                        posterUrl = realimg
-                    }
-                }
-            }.reversed()
+                EpisodeData(
+                    url = epurl,
+                    title = epTitle,
+                    poster = realimg,
+                    year = epYear,
+                    isMovie = isMovie
+                )
+            }
 
-            val movieEpisodes = sagaItems.filterIsInstance<Episode>()
-            val seriesSuggestions = sagaItems.filterIsInstance<SearchResponse>()
+            // Ordenar por año (más antiguo primero)
+            val sortedItems = sagaItems.sortedBy { it.year }
 
-            val episodes = if (isSeriesCurada) emptyList() else movieEpisodes.mapIndexed { idx, ep ->
-                ep.apply {
+            // Separar y crear los objetos apropiados
+            val movieEpisodes = sortedItems.filter { it.isMovie }.mapIndexed { index, data ->
+                newEpisode(data.url) {
+                    name = data.title + if (data.year > 0) " (${data.year})" else ""
+                    posterUrl = data.poster
                     season = 1
-                    episode = idx + 1
+                    episode = index + 1
                 }
             }
+
+            val seriesSuggestions = sortedItems.filter { !it.isMovie }.map { data ->
+                newTvSeriesSearchResponse(data.title, data.url, TvType.TvSeries) {
+                    posterUrl = data.poster
+                    if (data.year > 0) {
+                        this.year = data.year
+                    }
+                }
+            }
+
+            val episodes = if (isSeriesCurada) emptyList() else movieEpisodes
 
             val poster = episodes.firstOrNull()?.posterUrl ?: seriesSuggestions.firstOrNull()?.posterUrl
             ?: doc.selectFirst("div.infoCard .uAvatar img")?.attr("data-src")
             ?: "https://sololatino.net/wp-content/uploads/2022/11/logo-final.png"
+
+            // Contar años únicos para mostrar en la descripción
+            val uniqueYears = sortedItems.mapNotNull { if (it.year > 0) it.year else null }.distinct().sorted()
+            val yearRangeText = if (uniqueYears.isNotEmpty()) {
+                if (uniqueYears.size == 1) {
+                    "Año: ${uniqueYears.first()}"
+                } else {
+                    "Años: ${uniqueYears.first()} - ${uniqueYears.last()}"
+                }
+            } else ""
 
             return newTvSeriesLoadResponse(
                 title,
@@ -169,18 +195,27 @@ class SoloLatino : MainAPI() {
                 plot = buildString {
                     append(description.ifBlank { "Lista curada por usuarios." })
                     append("\n\nCreada por: $author • Favoritos: $likes")
-                    if (!isSeriesCurada) {
-                        append("\nOrden cronológico para maratón")
+                    if (yearRangeText.isNotEmpty()) {
+                        append("\n$yearRangeText")
+                    }
+                    if (!isSeriesCurada && sortedItems.isNotEmpty()) {
+                        append("\nOrden cronológico (${movieEpisodes.size} películas)")
                     }
                     if (seriesSuggestions.isNotEmpty()) {
-                        append("\n\nSeries relacionadas (en TV verás sugerencias clicables abajo):")
-                        seriesSuggestions.forEach { series ->
-                            append("\n- ${series.name}")
+                        append("\n\nSeries relacionadas (${seriesSuggestions.size} series - en TV verás sugerencias clicables abajo):")
+                        if (seriesSuggestions.size <= 5) { // Mostrar solo las primeras 5 para no saturar
+                            seriesSuggestions.take(5).forEachIndexed { idx, series ->
+                                val yearText = if (series.year != null) " (${series.year})" else ""
+                                append("\n${idx + 1}. ${series.name}$yearText")
+                            }
+                            if (seriesSuggestions.size > 5) {
+                                append("\n... y ${seriesSuggestions.size - 5} más")
+                            }
                         }
                     }
                 }
                 tags = listOf("Curada", "Maratón")
-                recommendations = seriesSuggestions  // Siempre agregar (en móvil no se ve, en TV sí)
+                recommendations = seriesSuggestions
             }
         }
 
@@ -244,4 +279,13 @@ class SoloLatino : MainAPI() {
         }
         return true
     }
+
+    // Clase de datos auxiliar para manejar la información de los episodios
+    private data class EpisodeData(
+        val url: String,
+        val title: String,
+        val poster: String?,
+        val year: Int,
+        val isMovie: Boolean
+    )
 }
