@@ -1,4 +1,4 @@
-package com.stormunblessed
+package com.sololatino
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.SubtitleFile
@@ -114,3 +114,4 @@ fun fixHostsLinks(url: String): String {
         .replaceFirst("https://uqload.io", "https://uqload.com")
         .replaceFirst("https://do7go.com", "https://dood.la")
 }
+
