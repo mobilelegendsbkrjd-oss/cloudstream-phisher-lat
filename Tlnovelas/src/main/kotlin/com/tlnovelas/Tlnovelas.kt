@@ -5,6 +5,9 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
 import java.net.URLDecoder
+import javax.crypto.Cipher
+import javax.crypto.spec.SecretKeySpec
+import java.util.Base64
 
 class Tlnovelas : MainAPI() {
 
@@ -81,30 +84,103 @@ class Tlnovelas : MainAPI() {
         }
     }
 
-    private fun decodeVideoUrl(encoded: String): String {
+    private fun decodeVideolUrl(encoded: String): String {
         return try {
-            // Decodificar la cadena ofuscada
-            val parts = encoded.split("|")
-            if (parts.size == 2) {
-                val encodedStr = parts[0]
-                val key = parts[1].toInt()
+            // Para patrones como 'oEiMaglJZklh|1'
+            if (encoded.contains('|')) {
+                val parts = encoded.split('|')
+                val data = parts[0]
+                val key = parts.getOrNull(1)?.toIntOrNull() ?: 0
                 
-                // Descifrado simple (basado en el patrón común de estos sitios)
-                val decodedChars = mutableListOf<Char>()
-                for (i in encodedStr.indices) {
-                    val charCode = encodedStr[i].code - key - i
-                    decodedChars.add(charCode.toChar())
+                val result = StringBuilder()
+                for (i in data.indices) {
+                    val charCode = data[i].code - key - i
+                    result.append(charCode.toChar())
                 }
-                val decodedString = decodedChars.joinToString("")
-                
-                // URL decode si es necesario
-                URLDecoder.decode(decodedString, "UTF-8")
-            } else {
-                encoded
+                return result.toString()
             }
+            encoded
         } catch (e: Exception) {
             encoded
         }
+    }
+
+    private suspend fun extractVideoFromScript(response: String, data: String): List<String> {
+        val videoLinks = mutableSetOf<String>()
+        
+        // Patrón 1: Buscar array e[] con valores ofuscados
+        val arrayPattern = Regex("""e\[\s*(\d+)\s*\]\s*=\s*['"]([^'"]+)['"]""")
+        val arrayMatches = arrayPattern.findAll(response)
+        
+        // Buscar función v_ideo para saber qué índice usar
+        val videoFuncPattern = Regex("""v_ideo\(([^)]+)\)""")
+        val videoFuncMatch = videoFuncPattern.find(response)
+        
+        // Si encontramos la función v_ideo, buscar el índice que usa
+        var targetIndex = 0
+        videoFuncMatch?.let { match ->
+            val param = match.groupValues[1]
+            val indexPattern = Regex("""e\[(\d+)\]""")
+            val indexMatch = indexPattern.find(param)
+            indexMatch?.let {
+                targetIndex = it.groupValues[1].toIntOrNull() ?: 0
+            }
+        }
+        
+        // Decodificar el enlace del índice objetivo
+        arrayMatches.forEach { match ->
+            val index = match.groupValues[1].toIntOrNull() ?: 0
+            val encoded = match.groupValues[2]
+            
+            if (index == targetIndex) {
+                val decoded = decodeVideolUrl(encoded)
+                if (decoded.startsWith("http")) {
+                    videoLinks.add(decoded)
+                }
+            }
+        }
+        
+        // Patrón 2: Buscar directamente enlaces en el HTML después de que se ejecuta JS
+        // A veces los enlaces están en comentarios o en atributos data
+        val directPatterns = listOf(
+            Regex("""data-(?:src|file)\s*=\s*['"](https?://[^'"]+)['"]"""),
+            Regex("""//video\.php\?h\s*=\s*['"]([^'"]+)['"]"""),
+            Regex("""atob\s*\(\s*['"]([^'"]+)['"]\s*\)""")
+        )
+        
+        directPatterns.forEach { pattern ->
+            pattern.findAll(response).forEach { match ->
+                val found = match.groupValues[1]
+                if (found.startsWith("http")) {
+                    videoLinks.add(found)
+                } else if (found.contains("base64")) {
+                    try {
+                        val decoded = String(Base64.getDecoder().decode(found))
+                        if (decoded.startsWith("http")) {
+                            videoLinks.add(decoded)
+                        }
+                    } catch (e: Exception) {
+                        // Ignorar errores de base64
+                    }
+                }
+            }
+        }
+        
+        // Patrón 3: Buscar en la inicialización de jQuery/JavaScript
+        val jqueryPattern = Regex("""\\$\s*\([^)]+\)\.click\s*\([^)]+\)\s*{[^}]*v_ideo\s*\([^)]+\)[^}]*}""", RegexOption.DOT_MATCHES_ALL)
+        jqueryPattern.find(response)?.let {
+            // Dentro de este bloque, buscar el array e[]
+            val block = it.value
+            arrayPattern.findAll(block).forEach { arrayMatch ->
+                val encoded = arrayMatch.groupValues[2]
+                val decoded = decodeVideolUrl(encoded)
+                if (decoded.startsWith("http")) {
+                    videoLinks.add(decoded)
+                }
+            }
+        }
+        
+        return videoLinks.toList()
     }
 
     override suspend fun loadLinks(
@@ -114,86 +190,59 @@ class Tlnovelas : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val response = app.get(data).text
-        val videoLinks = mutableSetOf<String>()
-
-        // 1. BUSCAR Y DECODIFICAR FORMATO OFUSCADO JS (e[0] = '...')
-        val regexJsArray = Regex("""e\[\d+\]\s*=\s*['"]([^'"]+)['"]""")
-        regexJsArray.findAll(response).forEach { match ->
-            val encodedUrl = match.groupValues[1]
-            val decodedUrl = decodeVideoUrl(encodedUrl)
-            if (decodedUrl.startsWith("http")) {
-                videoLinks.add(decodedUrl)
-            }
-        }
-
-        // 2. BUSCAR EN LA FUNCIÓN v_ideo()
-        val regexVideFunc = Regex("""v_ideo\(([^)]+)\)""")
-        regexVideFunc.findAll(response).forEach { match ->
-            val param = match.groupValues[1]
-            // Buscar el valor correspondiente en el array e[]
-            val arrayIndex = Regex("""e\[(\d+)\]""").find(param)?.groupValues?.get(1)?.toIntOrNull()
-            if (arrayIndex != null) {
-                // Buscar la definición de ese índice en el array
-                val arrayRegex = Regex("""e\[$arrayIndex\]\s*=\s*['"]([^'"]+)['"]""")
-                arrayRegex.find(response)?.let { arrayMatch ->
-                    val encodedUrl = arrayMatch.groupValues[1]
-                    val decodedUrl = decodeVideoUrl(encodedUrl)
-                    if (decodedUrl.startsWith("http")) {
-                        videoLinks.add(decodedUrl)
-                    }
-                }
-            }
-        }
-
-        // 3. FORMATO VIEJO (var e = ['...', '...'])
-        Regex("""var\s+e\s*=\s*\[([^\]]+)\]""").findAll(response).forEach { match ->
-            match.groupValues[1].split(",")
-                .map { it.trim().trim('\'', '"') }
-                .filter { it.isNotEmpty() }
-                .forEach { encodedUrl ->
-                    val decodedUrl = decodeVideoUrl(encodedUrl)
-                    if (decodedUrl.startsWith("http")) {
-                        videoLinks.add(decodedUrl)
-                    }
-                }
-        }
-
-        // 4. BUSCAR DIRECTAMENTE PATRONES DECODIFICADOS
-        val decodedPatterns = listOf(
-            Regex("""https?://[^"'\s<>]+\.(mp4|m3u8|mkv|avi|mov|flv|wmv|webm)[^"'\s<>]*""", RegexOption.IGNORE_CASE),
-            Regex("""https?://[^"'\s<>]+/video/[^"'\s<>]+""", RegexOption.IGNORE_CASE),
-            Regex("""https?://[^"'\s<>]+/embed/[^"'\s<>]+""", RegexOption.IGNORE_CASE)
-        )
-        
-        decodedPatterns.forEach { pattern ->
-            pattern.findAll(response).forEach { match ->
-                val url = match.value
-                if (!url.contains("google") && !url.contains("adskeeper") && !url.contains("googletagmanager")) {
-                    videoLinks.add(url)
-                }
-            }
-        }
-
-        // 5. IFRAMES como respaldo
-        Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE).findAll(response).forEach {
-            val link = it.groupValues[1]
-            if (!link.contains("google") && !link.contains("adskeeper")) {
-                videoLinks.add(link)
-            }
-        }
-
-        // Procesar todos los enlaces encontrados
         var success = false
-        videoLinks.forEach { link ->
+        
+        // Método 1: Extraer de scripts JavaScript
+        val scriptLinks = extractVideoFromScript(response, data)
+        scriptLinks.forEach { link ->
             try {
                 if (loadExtractor(link, data, subtitleCallback, callback)) {
                     success = true
                 }
             } catch (e: Exception) {
-                // Ignorar excepciones y continuar
+                // Ignorar errores
             }
         }
-
-        return success || videoLinks.isNotEmpty()
+        
+        // Método 2: Buscar iframes directamente (como respaldo)
+        if (!success) {
+            val iframePattern = Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
+            iframePattern.findAll(response).forEach { match ->
+                val link = match.groupValues[1]
+                if (!link.contains("google") && !link.contains("adskeeper")) {
+                    try {
+                        if (loadExtractor(link, data, subtitleCallback, callback)) {
+                            success = true
+                        }
+                    } catch (e: Exception) {
+                        // Ignorar errores
+                    }
+                }
+            }
+        }
+        
+        // Método 3: Buscar enlaces de video directos (mp4, m3u8, etc.)
+        if (!success) {
+            val videoPatterns = listOf(
+                Regex("""https?://[^"'\s]+\.(mp4|m3u8|mkv|avi)[^"'\s]*""", RegexOption.IGNORE_CASE),
+                Regex("""(https?://[^"'\s]+/v/[/\w]+)"""),
+                Regex("""(https?://[^"'\s]+/embed/\d+)""")
+            )
+            
+            videoPatterns.forEach { pattern ->
+                pattern.findAll(response).forEach { match ->
+                    val link = match.value
+                    try {
+                        if (loadExtractor(link, data, subtitleCallback, callback)) {
+                            success = true
+                        }
+                    } catch (e: Exception) {
+                        // Ignorar errores
+                    }
+                }
+            }
+        }
+        
+        return success
     }
 }
