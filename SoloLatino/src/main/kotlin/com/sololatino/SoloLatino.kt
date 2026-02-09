@@ -1,11 +1,10 @@
-package com.SoloLatino
+package com.sololatino
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
-import org.jsoup.nodes.Element
 
-class SoloLatino : MainAPI() {
+class SoloLatinoPlugin : MainAPI() {
     override var mainUrl = "https://sololatino.net"
     override var name = "SoloLatino"
     override var lang = "mx"
@@ -19,135 +18,209 @@ class SoloLatino : MainAPI() {
         TvType.Cartoon,
     )
 
-    override val mainPage = mainPageOf(
-        "$mainUrl/series/" to "Series Recientes",
-        "$mainUrl/peliculas/" to "Películas Recientes",
-        "$mainUrl/animes/" to "Animes Recientes",
-        "$mainUrl/genre_series/toons/" to "CarToons",
-        "$mainUrl/genre_series/kdramas/" to "Doramas",
-        "$mainUrl/network/netflix/" to "Netflix",
-        "$mainUrl/network/amazon/" to "Amazon",
-        "$mainUrl/network/disney/" to "Disney+",
-        "$mainUrl/network/hbo-max/" to "HBO Max",
-        "$mainUrl/network/apple-tv/" to "Apple TV",
-        "$mainUrl/network/hulu/" to "Hulu"
-    )
+    // URL del JSON externo con las listas curadas
+    private val listasJsonUrl = "https://raw.githubusercontent.com/mobilelegendsbkrjd-oss/lat_cs_bkrjd/main/ListasSL.json"
 
-    private fun getImage(el: Element?): String? {
-        if (el == null) return null
-        val attrs = listOf("data-src","data-lazy","data-original","data-srcset","src","srcset")
-        for (attr in attrs) {
-            val v = el.attr(attr)
-            if (v.isNotBlank() && !v.startsWith("data:image")) {
-                return v.split(",").first().trim().split(" ").first()
-            }
-        }
-        return null
-    }
-
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+    @Suppress("DEPRECATION")
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
+        val items = ArrayList<HomePageList>()
         val urls = listOf(
-            "Series Recientes" to "$mainUrl/series/",
-            "Películas Recientes" to "$mainUrl/peliculas/",
-            "Animes Recientes" to "$mainUrl/animes/",
-            "CarToons" to "$mainUrl/genre_series/toons/",
-            "Doramas" to "$mainUrl/genre_series/kdramas/",
-            "Netflix" to "$mainUrl/network/netflix/",
-            "Amazon" to "$mainUrl/network/amazon/",
-            "Disney+" to "$mainUrl/network/disney/",
-            "HBO Max" to "$mainUrl/network/hbo-max/",
-            "Apple TV" to "$mainUrl/network/apple-tv/",
-            "Hulu" to "$mainUrl/network/hulu/"
+            Pair("Peliculas", "$mainUrl/peliculas"),
+            Pair("Series", "$mainUrl/series"),
+            Pair("Animes", "$mainUrl/animes"),
+            Pair("Cartoons", "$mainUrl/genre_series/toons"),
+            Pair("Doramas", "$mainUrl/genre_series/kdramas/"),
+            Pair("Netflix", "$mainUrl/network/netflix/"),
+            Pair("Amazon", "$mainUrl/network/amazon/"),
+            Pair("Disney+", "$mainUrl/network/disney/"),
+            Pair("HBO Max", "$mainUrl/network/hbo-max/"),
+            Pair("Apple TV", "$mainUrl/network/apple-tv/"),
+            Pair("Hulu", "$mainUrl/network/hulu/"),
+            Pair("Listas Usuarios", listasJsonUrl)   // ← tu JSON externo
         )
 
-        val lists = urls.map { (section, url) ->
-            val tvType = when (section) {
-                "Películas Recientes" -> TvType.Movie
-                "Series Recientes" -> TvType.TvSeries
-                "Animes Recientes" -> TvType.Anime
-                "CarToons" -> TvType.Cartoon
-                "Doramas" -> TvType.TvSeries
-                "Netflix", "Amazon", "Disney+", "HBO Max", "Apple TV", "Hulu" -> TvType.TvSeries
+        urls.amap { (name, url) ->
+            val tvType = when (name) {
+                "Peliculas" -> TvType.Movie
+                "Series", "Doramas", "Netflix", "Amazon", "Disney+", "HBO Max", "Apple TV", "Hulu", "Listas curadas" -> TvType.TvSeries
+                "Animes" -> TvType.Anime
+                "Cartoons" -> TvType.Cartoon
                 else -> TvType.Others
             }
 
-            val doc = app.get(url).document
-            val items = doc.select("div.items article.item").mapNotNull {
-                val title = it.selectFirst("a div.data h3")?.text() ?: return@mapNotNull null
-                val link = it.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-                val img = getImage(it.selectFirst("div.poster img"))
+            val home = if (name == "Listas curadas") {
+                try {
+                    val jsonText = app.get(url, timeout = 20).text.trim()
 
-                newTvSeriesSearchResponse(title, link, tvType) {
-                    posterUrl = img
+                    // Parsing simple y seguro sin dependencias extras
+                    val listas = mutableListOf<SearchResponse>()
+                    val cleanJson = jsonText.removePrefix("[").removeSuffix("]").trim()
+                    if (cleanJson.isEmpty()) return@amap HomePageList(name, emptyList())
+
+                    val objetos = cleanJson.split("},").map { it.trim() + "}" }
+
+                    objetos.forEach { objStr ->
+                        try {
+                            val titleMatch = Regex(""""title"\s*:\s*"([^"]*)"""").find(objStr)
+                            val urlMatch = Regex(""""url"\s*:\s*"([^"]*)"""").find(objStr)
+                            val posterMatch = Regex(""""poster"\s*:\s*"([^"]*)"""").find(objStr)
+
+                            val title = titleMatch?.groupValues?.get(1) ?: return@forEach
+                            val link = urlMatch?.groupValues?.get(1) ?: return@forEach
+                            val poster = posterMatch?.groupValues?.get(1)
+
+                            listas.add(
+                                newTvSeriesSearchResponse(title, link, tvType) {
+                                    this.posterUrl = poster
+                                }
+                            )
+                        } catch (e: Exception) {
+                            // Ignora objeto mal formado
+                        }
+                    }
+
+                    listas
+                } catch (e: Exception) {
+                    emptyList()
+                }
+            } else {
+                val finalUrl = if (page > 1) "$url/page/$page/" else url
+                val doc = app.get(finalUrl).document
+                doc.select("div.items article.item").map {
+                    val title = it.selectFirst("a div.data h3")?.text()
+                    val link = it.selectFirst("a")?.attr("href")
+                    val img = it.selectFirst("div.poster img.lazyload")?.attr("data-srcset")
+                    newTvSeriesSearchResponse(title!!, link!!, tvType, true) {
+                        this.posterUrl = img
+                    }
                 }
             }
 
-            HomePageList(section, items)
+            items.add(HomePageList(name, home))
         }
-
-        return HomePageResponse(lists)
+        return newHomePageResponse(items)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val doc = app.get("$mainUrl/?s=$query").document
-        return doc.select("div.items article.item").mapNotNull {
-            val title = it.selectFirst("a div.data h3")?.text() ?: return@mapNotNull null
-            val link = it.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-            val img = getImage(it.selectFirst("div.poster img"))
-
-            newTvSeriesSearchResponse(title, link, TvType.TvSeries) {
-                posterUrl = img
+        val url = "$mainUrl/?s=$query"
+        val doc = app.get(url).document
+        return doc.select("div.items article.item").map {
+            val title = it.selectFirst("a div.data h3")?.text()
+            val link = it.selectFirst("a")?.attr("href")
+            val img = it.selectFirst("div.poster img.lazyload")?.attr("data-srcset")
+            newTvSeriesSearchResponse(title!!, link!!, TvType.TvSeries) {
+                this.posterUrl = img
             }
         }
     }
+
+    class MainTemporada(elements: Map<String, List<MainTemporadaElement>>) :
+        HashMap<String, List<MainTemporadaElement>>(elements)
+
+    data class MainTemporadaElement(
+        val title: String? = null,
+        val image: String? = null,
+        val season: Int? = null,
+        val episode: Int? = null
+    )
 
     override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url).document
 
-        if (url.contains("/episodios/")) {
-            val title = doc.selectFirst("title")?.text()?.substringBefore(" -") ?: return null
-            val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")
-            return newMovieLoadResponse(title, url, TvType.Movie, url) {
-                posterUrl = poster
+        val isUserList = url.contains("/listas/") && doc.selectFirst("div.infoCard") != null
+
+        if (isUserList) {
+            val title = doc.selectFirst("div.infoCard h1")?.text()?.trim() ?: "Lista de la Comunidad"
+            val description = doc.selectFirst("div.infoCard article p")?.text()?.trim() ?: ""
+            val author = doc.selectFirst("div.infoCard a.createdbyT span")?.text()?.trim() ?: "Usuario"
+            val likes = doc.selectFirst("div.infoCard div.createdbyT span")?.text()?.trim() ?: "0"
+
+            var episodes = doc.select("div#archive-content article.item").mapIndexedNotNull { index, it ->
+                val epurl = it.selectFirst("a")?.attr("href")
+                val epTitle = it.selectFirst("h3")?.text()?.trim() ?: "Parte ${index + 1}"
+                val epYear = it.selectFirst(".data p")?.text()?.trim()
+                val realimg = it.selectFirst("div.poster img")?.attr("data-srcset") ?: it.selectFirst("img")?.attr("data-src")
+
+                newEpisode(epurl ?: "") {
+                    this.name = epTitle + if (epYear != null) " ($epYear)" else ""
+                    this.posterUrl = realimg
+                }
+            }.reversed()
+
+            episodes = episodes.mapIndexed { idx, ep ->
+                ep.apply {
+                    this.season = 1
+                    this.episode = idx + 1
+                }
+            }
+
+            val poster = episodes.firstOrNull()?.posterUrl
+                ?: doc.selectFirst("div.infoCard .uAvatar img")?.attr("data-src")
+                ?: "https://sololatino.net/wp-content/uploads/2022/11/logo-final.png"
+
+            return newTvSeriesLoadResponse(
+                title,
+                url, TvType.TvSeries, episodes
+            ) {
+                this.posterUrl = poster
+                this.backgroundPosterUrl = poster
+                this.plot = buildString {
+                    append(description.ifBlank { "Saga o colección curada por usuarios." })
+                    append("\n\nCreada por: $author • Favoritos: $likes")
+                    append("\nLista de SoloLatino - orden cronológico para maratón")
+                }
+                this.tags = listOf("Comunidad", "Lista", "Saga", "Maratón")
             }
         }
 
         val tvType = if (url.contains("peliculas")) TvType.Movie else TvType.TvSeries
-        val title = doc.selectFirst("div.data h1")?.text() ?: return null
-        val poster = getImage(doc.selectFirst("div.poster img"))
-        val description = doc.selectFirst("div.wp-content")?.text()
+        val title = doc.selectFirst("div.data h1")?.text() ?: ""
+        val poster = doc.selectFirst("div.poster img")!!.attr("data-src")
+        val backimage = doc.selectFirst(".wallpaper")?.attr("style")?.substringAfter("url(")?.substringBefore(");")
+        val description = doc.selectFirst("div.wp-content")!!.text()
         val tags = doc.select("div.sgeneros a").map { it.text() }
-
-        val episodes = if (tvType == TvType.TvSeries) {
-            doc.select("ul.episodios li").mapNotNull {
-                val epUrl = it.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-                val epTitle = it.selectFirst("div.epst")?.text() ?: "Episodio"
-                val nums = it.selectFirst("div.numerando")?.text()
-                    ?.split("-")?.map { n -> n.trim().toIntOrNull() }
-                val img = getImage(it.selectFirst("div.imagen img"))
-
-                newEpisode(epUrl) {
-                    name = epTitle
-                    season = nums?.getOrNull(0)
-                    episode = nums?.getOrNull(1)
-                    posterUrl = img
+        var episodes = if (tvType == TvType.TvSeries) {
+            doc.select("div#seasons div.se-c").flatMap { season ->
+                season.select("ul.episodios li").map {
+                    val epurl = fixUrl(it.selectFirst("a")?.attr("href") ?: "")
+                    val epTitle = it.selectFirst("div.episodiotitle div.epst")!!.text()
+                    val seasonEpisodeNumber =
+                        it.selectFirst("div.episodiotitle div.numerando")?.text()?.split("-")?.map {
+                            it.trim().toIntOrNull()
+                        }
+                    val realimg = it.selectFirst("div.imagen img")?.attr("data-src")
+                    newEpisode(epurl) {
+                        this.name = epTitle
+                        this.season = seasonEpisodeNumber?.getOrNull(0)
+                        this.episode = seasonEpisodeNumber?.getOrNull(1)
+                        this.posterUrl = realimg
+                    }
                 }
             }
-        } else emptyList()
+        } else listOf()
 
         return when (tvType) {
-            TvType.TvSeries -> newTvSeriesLoadResponse(title, url, tvType, episodes) {
-                posterUrl = poster
-                backgroundPosterUrl = poster
-                plot = description
-                this.tags = tags
+            TvType.TvSeries -> {
+                newTvSeriesLoadResponse(
+                    title,
+                    url, tvType, episodes,
+                ) {
+                    this.posterUrl = poster
+                    this.backgroundPosterUrl = backimage ?: poster
+                    this.plot = description
+                    this.tags = tags
+                }
             }
-            TvType.Movie -> newMovieLoadResponse(title, url, tvType, url) {
-                posterUrl = poster
-                backgroundPosterUrl = poster
-                plot = description
-                this.tags = tags
+
+            TvType.Movie -> {
+                newMovieLoadResponse(title, url, tvType, url) {
+                    this.posterUrl = poster
+                    this.backgroundPosterUrl = backimage ?: poster
+                    this.plot = description
+                    this.tags = tags
+                }
             }
+
             else -> null
         }
     }
@@ -158,43 +231,21 @@ class SoloLatino : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val doc = app.get(data).document
-        var found = false
-
-        suspend fun handleUrl(url: String) {
-            val finalUrl = if (url.startsWith("//")) "https:$url" else url
-
-            if (finalUrl.contains("embed69", ignoreCase = true)) {
-                Embed69Extractor.load(
-                    finalUrl,
-                    mainUrl,
-                    subtitleCallback,
-                    callback
-                )
-                found = true
-            } else {
-                loadExtractor(finalUrl, mainUrl, subtitleCallback, callback)
-                found = true
+        app.get(data).document.selectFirst("iframe")?.attr("src")?.let {
+            if (it.startsWith("https://embed69.org/")) {
+                Embed69Extractor.load(it, data, subtitleCallback, callback)
+            } else if (it.startsWith("https://xupalace.org/video")) {
+                val regex = """(go_to_player|go_to_playerVast)\('(.*?)'""".toRegex()
+                regex.findAll(app.get(it).document.html()).map { it.groupValues.get(2) }
+                    .toList().amap {
+                        loadExtractor(fixHostsLinks(it), data, subtitleCallback, callback)
+                    }
+            } else { // https://xupalace.org/uqlink.php or others
+                app.get(it).document.selectFirst("iframe")?.attr("src")?.let {
+                    loadExtractor(fixHostsLinks(it), data, subtitleCallback, callback)
+                }
             }
         }
-
-        // Iframes
-        doc.select("iframe").forEach { iframe ->
-            val src = iframe.attr("src")
-            if (src.isNotBlank()) {
-                handleUrl(src)
-            }
-        }
-
-        // Links dentro del HTML / scripts
-        val html = doc.html()
-        val regex =
-            Regex("""(https?://[^\s'"]*(embed|player|stream|video)[^\s'"]+)""")
-
-        regex.findAll(html).forEach {
-            handleUrl(it.value)
-        }
-
-        return found
+        return true
     }
 }
