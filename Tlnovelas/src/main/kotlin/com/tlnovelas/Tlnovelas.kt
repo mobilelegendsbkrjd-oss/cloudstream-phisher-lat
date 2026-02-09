@@ -116,23 +116,65 @@ class Tlnovelas : MainAPI() {
         val response = app.get(data).text
         val videoLinks = mutableSetOf<String>()
 
-        // ───────────────────────────────────────────────
-        // Parte ORIGINAL que ya funcionaba (NO TOCAR)
-        // ───────────────────────────────────────────────
-        // 1. e[N] = 'https://...'
-        Regex("""e\[\d+\]\s*=\s*['"](https?://[^'"]+)['"]""").findAll(response).forEach {
-            videoLinks.add(it.groupValues[1].replace("\\/", "/"))
+        // 1. BUSCAR Y DECODIFICAR FORMATO OFUSCADO JS (e[0] = '...')
+        val regexJsArray = Regex("""e\[\d+\]\s*=\s*['"]([^'"]+)['"]""")
+        regexJsArray.findAll(response).forEach { match ->
+            val encodedUrl = match.groupValues[1]
+            val decodedUrl = decodeVideoUrl(encodedUrl)
+            if (decodedUrl.startsWith("http")) {
+                videoLinks.add(decodedUrl)
+            }
         }
 
-        // 2. var e = ['https://...', ...]
+        // 2. BUSCAR EN LA FUNCIÓN v_ideo()
+        val regexVideFunc = Regex("""v_ideo\(([^)]+)\)""")
+        regexVideFunc.findAll(response).forEach { match ->
+            val param = match.groupValues[1]
+            // Buscar el valor correspondiente en el array e[]
+            val arrayIndex = Regex("""e\[(\d+)\]""").find(param)?.groupValues?.get(1)?.toIntOrNull()
+            if (arrayIndex != null) {
+                // Buscar la definición de ese índice en el array
+                val arrayRegex = Regex("""e\[$arrayIndex\]\s*=\s*['"]([^'"]+)['"]""")
+                arrayRegex.find(response)?.let { arrayMatch ->
+                    val encodedUrl = arrayMatch.groupValues[1]
+                    val decodedUrl = decodeVideoUrl(encodedUrl)
+                    if (decodedUrl.startsWith("http")) {
+                        videoLinks.add(decodedUrl)
+                    }
+                }
+            }
+        }
+
+        // 3. FORMATO VIEJO (var e = ['...', '...'])
         Regex("""var\s+e\s*=\s*\[([^\]]+)\]""").findAll(response).forEach { match ->
             match.groupValues[1].split(",")
                 .map { it.trim().trim('\'', '"') }
-                .filter { it.startsWith("http") }
-                .forEach { videoLinks.add(it.replace("\\/", "/")) }
+                .filter { it.isNotEmpty() }
+                .forEach { encodedUrl ->
+                    val decodedUrl = decodeVideoUrl(encodedUrl)
+                    if (decodedUrl.startsWith("http")) {
+                        videoLinks.add(decodedUrl)
+                    }
+                }
         }
 
-        // 5. IFRAMES directos (tu respaldo original)
+        // 4. BUSCAR DIRECTAMENTE PATRONES DECODIFICADOS
+        val decodedPatterns = listOf(
+            Regex("""https?://[^"'\s<>]+\.(mp4|m3u8|mkv|avi|mov|flv|wmv|webm)[^"'\s<>]*""", RegexOption.IGNORE_CASE),
+            Regex("""https?://[^"'\s<>]+/video/[^"'\s<>]+""", RegexOption.IGNORE_CASE),
+            Regex("""https?://[^"'\s<>]+/embed/[^"'\s<>]+""", RegexOption.IGNORE_CASE)
+        )
+        
+        decodedPatterns.forEach { pattern ->
+            pattern.findAll(response).forEach { match ->
+                val url = match.value
+                if (!url.contains("google") && !url.contains("adskeeper") && !url.contains("googletagmanager")) {
+                    videoLinks.add(url)
+                }
+            }
+        }
+
+        // 5. IFRAMES como respaldo
         Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE).findAll(response).forEach {
             val link = it.groupValues[1]
             if (!link.contains("google") && !link.contains("adskeeper")) {
@@ -140,50 +182,15 @@ class Tlnovelas : MainAPI() {
             }
         }
 
-        // ───────────────────────────────────────────────
-        // NUEVA PARTE: Procesar formato ofuscado 'ID|N' → iframe embed
-        // ───────────────────────────────────────────────
-        Regex("""e\[\d+\]\s*=\s*['"]([^'"]+)['"]""").findAll(response).forEach { match ->
-            val fullCode = match.groupValues[1].trim()
-
-            // Solo procesar si tiene | y termina en número 1-4
-            if (fullCode.contains("|") && fullCode.matches(Regex(".*\\|[1-4]$"))) {
-                val parts = fullCode.split("|")
-                if (parts.size >= 2) {
-                    val id = parts[0].trim()
-                    val option = parts[1].trim()
-
-                    val baseUrl = when (option) {
-                        "1" -> "https://hqq.to/e/"
-                        "2" -> "https://dood.yt/e/"
-                        "3" -> "https://player.ojearanim.com/e/"   // nota: .com o .net, probamos .com primero
-                        "4" -> "https://player.vernovelastv.net/e/"
-                        else -> null
-                    }
-
-                    if (baseUrl != null && id.isNotEmpty()) {
-                        val embedUrl = baseUrl + id
-                        videoLinks.add(embedUrl)
-                        // Opcional: agregar variación .net si falla .com en opción 3
-                        if (option == "3") {
-                            videoLinks.add("https://player.ojearanim.net/e/" + id)
-                        }
-                    }
-                }
-            }
-        }
-
-        // ───────────────────────────────────────────────
-        // Procesar todos los links recolectados
-        // ───────────────────────────────────────────────
+        // Procesar todos los enlaces encontrados
         var success = false
-        videoLinks.distinct().forEach { link ->
+        videoLinks.forEach { link ->
             try {
                 if (loadExtractor(link, data, subtitleCallback, callback)) {
                     success = true
                 }
-            } catch (_: Throwable) {
-                // Continuar aunque uno falle
+            } catch (e: Exception) {
+                // Ignorar excepciones y continuar
             }
         }
 
