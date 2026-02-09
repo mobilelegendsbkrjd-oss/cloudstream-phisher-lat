@@ -1,12 +1,13 @@
-package com.pelisgratishd
+package com.cinecalidad
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 import android.content.Context
 
 @CloudstreamPlugin
-class PelisGratisHDProvider: Plugin() {
+class CinecalidadProvider: Plugin() {
     override fun load(context: Context) {
-        registerMainAPI(PelisGratisHD())
+        // All providers should be added in this manner. Please don't edit the providers list directly.
+        registerMainAPI(Cinecalidad())
     }
 }

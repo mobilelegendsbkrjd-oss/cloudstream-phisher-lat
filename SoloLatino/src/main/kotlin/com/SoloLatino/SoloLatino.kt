@@ -161,21 +161,38 @@ class SoloLatino : MainAPI() {
         val doc = app.get(data).document
         var found = false
 
-        doc.select("iframe").forEach { iframe ->
-            val src = iframe.attr("src")
-            if (src.isNotBlank()) {
-                val finalSrc = if (src.startsWith("//")) "https:$src" else src
-                loadExtractor(finalSrc, mainUrl, subtitleCallback, callback)
+        suspend fun handleUrl(url: String) {
+            val finalUrl = if (url.startsWith("//")) "https:$url" else url
+
+            if (finalUrl.contains("embed69", ignoreCase = true)) {
+                Embed69Extractor.load(
+                    finalUrl,
+                    mainUrl,
+                    subtitleCallback,
+                    callback
+                )
+                found = true
+            } else {
+                loadExtractor(finalUrl, mainUrl, subtitleCallback, callback)
                 found = true
             }
         }
 
+        // Iframes
+        doc.select("iframe").forEach { iframe ->
+            val src = iframe.attr("src")
+            if (src.isNotBlank()) {
+                handleUrl(src)
+            }
+        }
+
+        // Links dentro del HTML / scripts
         val html = doc.html()
-        val regex = Regex("""(https?://[^\s'"]*(embed|player|stream|video)[^\s'"]+)""")
-        regex.findAll(html).forEach { match ->
-            val urlMatch = match.value
-            loadExtractor(urlMatch, mainUrl, subtitleCallback, callback)
-            found = true
+        val regex =
+            Regex("""(https?://[^\s'"]*(embed|player|stream|video)[^\s'"]+)""")
+
+        regex.findAll(html).forEach {
+            handleUrl(it.value)
         }
 
         return found

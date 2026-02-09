@@ -1,12 +1,12 @@
-package com.pelisgratishd
+package com.lamovie
 
+import android.content.Context
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
-import android.content.Context
 
 @CloudstreamPlugin
-class PelisGratisHDProvider: Plugin() {
+class LaMovieProvider : Plugin() {
     override fun load(context: Context) {
-        registerMainAPI(PelisGratisHD())
+        registerMainAPI(LaMovie())
     }
 }

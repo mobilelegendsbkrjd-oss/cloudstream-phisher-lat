@@ -1,12 +1,12 @@
-package com.pelisgratishd
+package com.series24
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 import android.content.Context
 
 @CloudstreamPlugin
-class PelisGratisHDProvider: Plugin() {
+class Series24plugin: Plugin() {
     override fun load(context: Context) {
-        registerMainAPI(PelisGratisHD())
+        registerMainAPI(Series24())
     }
 }

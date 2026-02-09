@@ -1,0 +1,5 @@
+main: com.CinecalidadProvider.CinecalidadProviderPlugin
+name: Cinecalidad
+version: 5
+description: Cinecalidad Provider - Películas y Series en Español
+author: Stormunblessed

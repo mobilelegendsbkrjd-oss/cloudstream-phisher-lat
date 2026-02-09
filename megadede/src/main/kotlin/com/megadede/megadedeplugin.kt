@@ -1,12 +1,12 @@
-package com.pelisgratishd
+package com.megadede
 
+import android.content.Context
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
-import android.content.Context
 
 @CloudstreamPlugin
-class PelisGratisHDProvider: Plugin() {
+class megadedeplugin : Plugin() {
     override fun load(context: Context) {
-        registerMainAPI(PelisGratisHD())
+        registerMainAPI(megadede())
     }
 }

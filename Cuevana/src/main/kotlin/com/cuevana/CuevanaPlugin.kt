@@ -1,12 +1,12 @@
-package com.pelisgratishd
+package com.cuevana
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 import android.content.Context
 
 @CloudstreamPlugin
-class PelisGratisHDProvider: Plugin() {
+class CuevanaPlugin: Plugin() {
     override fun load(context: Context) {
-        registerMainAPI(PelisGratisHD())
+        registerMainAPI(Cuevana())
     }
 }

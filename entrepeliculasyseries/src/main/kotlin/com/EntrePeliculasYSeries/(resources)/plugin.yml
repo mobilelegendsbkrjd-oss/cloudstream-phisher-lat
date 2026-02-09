@@ -1,0 +1,7 @@
+name: "Entre Películas y Series"
+version: "1.0.0"
+description: "Extensión para entrepeliculasyseries.nz"
+website: "https://entrepeliculasyseries.nz"
+lang: "es"
+authors:
+  - "Cloudstream ES"
