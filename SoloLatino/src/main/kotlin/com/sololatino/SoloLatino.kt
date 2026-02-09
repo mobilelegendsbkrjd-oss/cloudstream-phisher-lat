@@ -4,7 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 
-class SoloLatinoPlugin : MainAPI() {
+class SoloLatino : MainAPI() {
     override var mainUrl = "https://sololatino.net"
     override var name = "SoloLatino"
     override var lang = "mx"
