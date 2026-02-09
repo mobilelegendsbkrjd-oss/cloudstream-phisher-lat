@@ -116,75 +116,74 @@ class Tlnovelas : MainAPI() {
         val response = app.get(data).text
         val videoLinks = mutableSetOf<String>()
 
-        // 1. Extraer todos los e[N] = 'ID|numero'
-        val regexJs = Regex("""e\[\d+\]\s*=\s*['"]([^'"]+)['"]""")
-        regexJs.findAll(response).forEach { match ->
-            val full = match.groupValues[1].trim()
+        // ───────────────────────────────────────────────
+        // Parte ORIGINAL que ya funcionaba (NO TOCAR)
+        // ───────────────────────────────────────────────
+        // 1. e[N] = 'https://...'
+        Regex("""e\[\d+\]\s*=\s*['"](https?://[^'"]+)['"]""").findAll(response).forEach {
+            videoLinks.add(it.groupValues[1].replace("\\/", "/"))
+        }
 
-            if (full.contains("|")) {
-                val parts = full.split("|")
+        // 2. var e = ['https://...', ...]
+        Regex("""var\s+e\s*=\s*\[([^\]]+)\]""").findAll(response).forEach { match ->
+            match.groupValues[1].split(",")
+                .map { it.trim().trim('\'', '"') }
+                .filter { it.startsWith("http") }
+                .forEach { videoLinks.add(it.replace("\\/", "/")) }
+        }
+
+        // 5. IFRAMES directos (tu respaldo original)
+        Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE).findAll(response).forEach {
+            val link = it.groupValues[1]
+            if (!link.contains("google") && !link.contains("adskeeper")) {
+                videoLinks.add(link)
+            }
+        }
+
+        // ───────────────────────────────────────────────
+        // NUEVA PARTE: Procesar formato ofuscado 'ID|N' → iframe embed
+        // ───────────────────────────────────────────────
+        Regex("""e\[\d+\]\s*=\s*['"]([^'"]+)['"]""").findAll(response).forEach { match ->
+            val fullCode = match.groupValues[1].trim()
+
+            // Solo procesar si tiene | y termina en número 1-4
+            if (fullCode.contains("|") && fullCode.matches(Regex(".*\\|[1-4]$"))) {
+                val parts = fullCode.split("|")
                 if (parts.size >= 2) {
                     val id = parts[0].trim()
                     val option = parts[1].trim()
 
-                    val base = when (option) {
+                    val baseUrl = when (option) {
                         "1" -> "https://hqq.to/e/"
                         "2" -> "https://dood.yt/e/"
-                        "3" -> "https://player.ojearanim.com/e/"
+                        "3" -> "https://player.ojearanim.com/e/"   // nota: .com o .net, probamos .com primero
                         "4" -> "https://player.vernovelastv.net/e/"
                         else -> null
                     }
 
-                    if (base != null && id.isNotEmpty()) {
-                        val embed = base + id
-                        videoLinks.add(embed)
+                    if (baseUrl != null && id.isNotEmpty()) {
+                        val embedUrl = baseUrl + id
+                        videoLinks.add(embedUrl)
+                        // Opcional: agregar variación .net si falla .com en opción 3
+                        if (option == "3") {
+                            videoLinks.add("https://player.ojearanim.net/e/" + id)
+                        }
                     }
                 }
             }
         }
 
-        // 2. Formato viejo var e = [...] (por compatibilidad)
-        Regex("""var\s+e\s*=\s*\[([^\]]+)\]""").findAll(response).forEach { match ->
-            match.groupValues[1].split(",")
-                .map { it.trim().trim('\'', '"') }
-                .filter { it.isNotEmpty() && it.contains("|") }
-                .forEach { full ->
-                    // Reutilizamos la misma lógica de arriba
-                    val parts = full.split("|")
-                    if (parts.size >= 2) {
-                        val id = parts[0].trim()
-                        val option = parts[1].trim()
-                        val base = when (option) {
-                            "1" -> "https://hqq.to/e/"
-                            "2" -> "https://dood.yt/e/"
-                            "3" -> "https://player.ojearanim.com/e/"
-                            "4" -> "https://player.vernovelastv.net/e/"
-                            else -> null
-                        }
-                        if (base != null && id.isNotEmpty()) {
-                            videoLinks.add(base + id)
-                        }
-                    }
-                }
-        }
-
-        // 3. Iframes directos (respaldo, filtra los útiles)
-        Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE).findAll(response).forEach {
-            val src = it.groupValues[1]
-            if (src.contains("/e/") && !src.contains("google") && !src.contains("ads")) {
-                videoLinks.add(src)
-            }
-        }
-
-        // 4. Intentar cargar extractores con cada link encontrado
+        // ───────────────────────────────────────────────
+        // Procesar todos los links recolectados
+        // ───────────────────────────────────────────────
         var success = false
-        videoLinks.forEach { link ->
+        videoLinks.distinct().forEach { link ->
             try {
                 if (loadExtractor(link, data, subtitleCallback, callback)) {
                     success = true
                 }
             } catch (_: Throwable) {
-                // Ignorar fallos individuales
+                // Continuar aunque uno falle
             }
         }
 
