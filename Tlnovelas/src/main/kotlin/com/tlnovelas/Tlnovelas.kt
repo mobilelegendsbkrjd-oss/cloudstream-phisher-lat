@@ -8,81 +8,111 @@ class Tlnovelas : MainAPI() {
 
     override var mainUrl = "https://ww2.tlnovelas.net"
     override var name = "Tlnovelas"
-    override val supportedTypes = setOf(TvType.TvSeries)
+    override val hasMainPage = true
     override var lang = "es"
+    override val hasQuickSearch = true
+    override val supportedTypes = setOf(TvType.TvSeries)
 
-    // ==============================
+    override val mainPage = mainPageOf(
+        "" to "Últimos Capítulos",
+        "gratis/telenovelas/" to "Ver Telenovelas"
+    )
+
+    // =============================
     // HOME
-    // ==============================
+    // =============================
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
 
-        val doc = app.get("$mainUrl/gratis/telenovelas/").document
+        val url =
+            if (page <= 1) "$mainUrl/${request.data}"
+            else "$mainUrl/${request.data}/page/$page"
 
-        val items = doc.select(".vk-poster").mapNotNull { it.toSearchResult() }
+        val document = app.get(url).document
 
-        return newHomePageResponse(
-            listOf(
-                HomePageList(
-                    name = "Telenovelas",
-                    list = items
-                )
-            ),
-            hasNext = false
-        )
+        val home = document
+            .select(".vk-poster, .p-content, .ani-card, .ani-txt")
+            .mapNotNull { it.toSearchResult() }
+            .distinctBy { it.url }
+
+        return newHomePageResponse(request.name, home, true)
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val a = selectFirst("a") ?: return null
-        val title = selectFirst(".vk-info p")?.text()?.trim() ?: return null
-        val href = a.attr("href")
+        var title =
+            selectFirst(".vk-info p, .p-title, .ani-txt")?.text()
+                ?: selectFirst("a")?.attr("title")
+                ?: return null
+
+        var href = selectFirst("a")?.attr("href") ?: return null
         val poster = selectFirst("img")?.attr("src")
 
-        return newTvSeriesSearchResponse(
-            title,
-            href,
-            TvType.TvSeries
-        ) {
+        if (href.contains("/ver/")) {
+            title = title.split(Regex("(?i)Capitulo|Capítulo"))[0].trim()
+
+            val slug = href
+                .removeSuffix("/")
+                .substringAfterLast("/")
+                .replace(Regex("(?i)-capitulo-\\d+"), "")
+                .replace(Regex("(?i)-capítulo-\\d+"), "")
+
+            href = "$mainUrl/novela/$slug/"
+        }
+
+        return newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
             posterUrl = poster
         }
     }
 
-    // ==============================
-    // SEARCH
-    // ==============================
-    override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/buscar/?q=${query.replace(" ", "+")}"
-        val doc = app.get(url).document
-
-        return doc.select(".vk-poster").mapNotNull { it.toSearchResult() }
-    }
-
-    // ==============================
+    // =============================
     // LOAD SERIE
-    // ==============================
+    // =============================
     override suspend fun load(url: String): LoadResponse {
-        val doc = app.get(url).document
 
-        val title = doc.selectFirst("h1")?.text()?.trim()
-            ?: throw ErrorLoadingException("No title")
+        val document = app.get(url).document
 
-        val poster = doc.selectFirst(".vk-imagen img")?.attr("src")
-            ?: doc.selectFirst("meta[property=og:image]")?.attr("content")
+        val novelaLink =
+            document.selectFirst("a[href*='/novela/']")?.attr("href")
 
-        val description = doc.selectFirst(".card-text")?.text()
+        val finalDoc =
+            if (url.contains("/ver/") && novelaLink != null)
+                app.get(novelaLink).document
+            else document
 
-        val episodes = doc.select("a[href*=\"/ver/\"]").mapIndexedNotNull { index, el ->
-            val epUrl = el.attr("href")
-            val epName = el.text().ifBlank { "Capítulo ${index + 1}" }
+        val title =
+            finalDoc.selectFirst("h1.card-title, .vk-title-main, h1")
+                ?.text()
+                ?.replace(Regex("(?i)Capitulos de|Ver"), "")
+                ?.trim()
+                ?: "Telenovela"
 
-            newEpisode(
-                epUrl,
-                epName,
-                episode = index + 1
-            )
-        }
+        val poster =
+            finalDoc.selectFirst("meta[property='og:image']")
+                ?.attr("content")
+                ?: finalDoc.selectFirst(".ani-img img")?.attr("src")
+
+        val description =
+            finalDoc.selectFirst(".card-text, .ani-description")?.text()
+
+        val episodes =
+            finalDoc.select("a[href*='/ver/']")
+                .map {
+                    val epUrl = it.attr("href")
+                    val epName = it.text()
+                        .replace(title, "", true)
+                        .replace(Regex("(?i)Ver|Capitulo|Capítulo"), "")
+                        .trim()
+
+                    newEpisode(epUrl) {
+                        name =
+                            if (epName.isEmpty()) "Capítulo"
+                            else "Capítulo $epName"
+                    }
+                }
+                .distinctBy { it.data }
+                .reversed()
 
         return newTvSeriesLoadResponse(
             title,
@@ -95,9 +125,9 @@ class Tlnovelas : MainAPI() {
         }
     }
 
-    // ==============================
-    // LINKS / VIDEO
-    // ==============================
+    // =============================
+    // LINKS
+    // =============================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -107,19 +137,19 @@ class Tlnovelas : MainAPI() {
 
         val html = app.get(data).text
 
-        // 1️⃣ URLs directas (streamwish, dood, lulu, etc)
+        // JS players
         Regex("""e\[\d+]\s*=\s*['"](https?://[^'"]+)['"]""")
             .findAll(html)
             .forEach {
                 loadExtractor(
-                    it.groupValues[1],
+                    it.groupValues[1].replace("\\/", "/"),
                     data,
                     subtitleCallback,
                     callback
                 )
             }
 
-        // 2️⃣ Blogger tokens → Marimar FIX
+        // Blogger tokens
         Regex("""e\[\d+]\s*=\s*['"]([a-zA-Z0-9_-]+)\|\d+['"]""")
             .findAll(html)
             .forEach {
@@ -128,28 +158,25 @@ class Tlnovelas : MainAPI() {
 
                 callback(
                     newExtractorLink(
-                        source = "Blogger",
-                        name = "Blogger",
-                        url = bloggerUrl,
-                        headers = mapOf(
-                            "Referer" to data,
-                            "User-Agent" to USER_AGENT
-                        )
+                        "Blogger",
+                        "Blogger",
+                        bloggerUrl
                     )
                 )
             }
 
-        // 3️⃣ Iframes normales
-        Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
-            .findAll(html)
-            .forEach {
-                loadExtractor(
-                    it.groupValues[1],
-                    data,
-                    subtitleCallback,
-                    callback
-                )
-            }
+        // Iframes
+        Regex(
+            """<iframe[^>]+src=["'](https?://[^"']+)["']""",
+            RegexOption.IGNORE_CASE
+        ).findAll(html).forEach {
+            loadExtractor(
+                it.groupValues[1],
+                data,
+                subtitleCallback,
+                callback
+            )
+        }
 
         return true
     }
