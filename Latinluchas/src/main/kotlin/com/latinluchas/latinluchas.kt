@@ -20,41 +20,38 @@ class LatinLuchas : MainAPI() {
     ): HomePageResponse {
 
         if (page > 1) {
-            return HomePageResponse(emptyList(), false)
+            return newHomePageResponse {
+                hasNext = false
+            }
         }
 
         val document = app.get(mainUrl).document
-        val items = mutableListOf<SearchResponse>()
 
-        document.select("a[href*='/tv/coli']").forEach { element ->
-            val href = element.attr("abs:href")
-            if (href.isBlank()) return@forEach
+        val items = document
+            .select("a[href*='/tv/coli']")
+            .mapNotNull { element ->
+                val href = element.attr("abs:href")
+                if (href.isBlank()) return@mapNotNull null
 
-            val title = element.text().trim().ifBlank {
-                "Evento en vivo"
+                val title = element.text().trim().ifBlank {
+                    "Evento en vivo"
+                }
+
+                newLiveSearchResponse(
+                    title,
+                    href,
+                    TvType.Live,
+                    false
+                ).apply {
+                    posterUrl = defaultPoster
+                }
             }
 
-            val item = newLiveSearchResponse(
-                title,
-                href,
-                TvType.Live,
-                false
-            ).apply {
-                posterUrl = defaultPoster
-            }
-
-            items.add(item)
+        return newHomePageResponse {
+            name = "Eventos y Repeticiones"
+            list(items)
+            hasNext = false
         }
-
-        return HomePageResponse(
-            listOf(
-                HomePageList(
-                    "Eventos y Repeticiones",
-                    items
-                )
-            ),
-            false
-        )
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -92,7 +89,9 @@ class LatinLuchas : MainAPI() {
 
         document.select("iframe[src]").forEach { iframe ->
             var src = iframe.attr("abs:src")
-            if (src.startsWith("//")) src = "https:$src"
+            if (src.startsWith("//")) {
+                src = "https:$src"
+            }
 
             if (loadExtractor(src, data, subtitleCallback, callback)) {
                 found = true
