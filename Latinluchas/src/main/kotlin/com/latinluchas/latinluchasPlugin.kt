@@ -1,5 +1,3 @@
-// Latinluchas/src/main/kotlin/com/latinluchas/LatinLuchasPlugin.kt
-
 package com.latinluchas
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
