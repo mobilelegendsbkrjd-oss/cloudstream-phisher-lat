@@ -7,9 +7,8 @@ import com.lagradost.cloudstream3.plugins.Plugin
 
 @CloudstreamPlugin
 class LatinLuchasPlugin : Plugin() {
-    override fun load(): List<MainAPI> {
-        return listOf(
-            LatinLuchas()
-        )
+    override fun load() {
+        // Registro automático en versiones recientes (no necesitas retornar lista)
+        registerMainAPI(LatinLuchas())
     }
 }
