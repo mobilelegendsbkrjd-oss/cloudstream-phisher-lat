@@ -16,11 +16,11 @@ class LatinLuchas : MainAPI() {
     private val defaultPoster = "https://tv.latinluchas.com/tv/wp-content/uploads/2026/02/hq720.avif"
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        if (page > 1) return newHomePageResponse { list = emptyList() }
+        if (page > 1) return newHomePageResponse { list(emptyList()) }
 
         val document = app.get(mainUrl).document
 
-        val homeList = document.select("article, .elementor-post, .post, a[href*='/tv/coli']").mapNotNull { element ->
+        val home = document.select("article, .elementor-post, .post, a[href*='/tv/coli']").mapNotNull { element ->
             val href = element.attr("abs:href").takeIf { it.contains("/tv/coli") } ?: return@mapNotNull null
             val title = element.selectFirst("h2, h3, .entry-title, a")?.text()?.trim() ?: "Evento sin título"
 
@@ -31,7 +31,7 @@ class LatinLuchas : MainAPI() {
 
         return newHomePageResponse {
             name = "Eventos y Repeticiones"
-            list = homeList
+            list(home)
         }
     }
 
@@ -60,82 +60,88 @@ class LatinLuchas : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data).document
-        var foundAny = false
+        val response = app.get(data).text
+        val videoLinks = mutableSetOf<String>()
+        var success = false
 
-        document.select("iframe[src]").forEach { iframe ->
-            var src = iframe.attr("abs:src").trim()
-            if (src.isBlank()) return@forEach
-            if (src.startsWith("//")) src = "https:$src"
+        // 1. IFRAMES PRINCIPALES (como en Tlnovelas)
+        val iframePattern = Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
+        iframePattern.findAll(response).forEach { match ->
+            val link = match.groupValues[1]
+            if (!link.contains("ads") && !link.contains("google") && !link.contains("analytics")) {
+                videoLinks.add(link)
+            }
+        }
 
-            when {
-                // OK.ru
-                src.contains("ok.ru/videoembed") -> {
-                    loadExtractor(src, data, subtitleCallback, callback)
-                    foundAny = true
-                }
+        // 2. Búsqueda agresiva de enlaces de video (mp4, m3u8, embed, player, etc.)
+        val directPatterns = listOf(
+            Regex("""https?://[^"'\s]+\.(mp4|m3u8|mkv|avi|mov|flv|wmv|webm)[^"'\s]*""", RegexOption.IGNORE_CASE),
+            Regex("""(https?://[^"'\s]+/v/[/\w\.]+)"""),
+            Regex("""(https?://[^"'\s]+/embed/[/\w\.]+)"""),
+            Regex("""(https?://[^"'\s]+/player/[/\w\.]+)"""),
+            Regex("""(https?://[^"'\s]+/e/[/\w\.]+)""")  // para bysekoze e/...
+        )
 
-                // Dailymotion
-                src.contains("dailymotion.com/embed/video") -> {
-                    loadExtractor(src, data, subtitleCallback, callback)
-                    foundAny = true
-                }
+        directPatterns.forEach { pattern ->
+            pattern.findAll(response).forEach { match ->
+                val link = match.value
+                videoLinks.add(link)
+            }
+        }
 
-                // Bysekoze / filemoon
-                src.contains("bysekoze.com") || src.contains("filemoon") -> {
-                    try {
-                        val mediaId = src.substringAfterLast("/")
-                        val host = src.substringAfter("https://").substringBefore("/")
+        // 3. API específica para bysekoze si detectamos su dominio
+        if (response.contains("bysekoze.com") || response.contains("filemoon")) {
+            val bysekozeMatch = Regex("""src=["'](https?://[^"']*bysekoze[^"']*/e/[^"']+)["']""").find(response)
+            bysekozeMatch?.let { match ->
+                val src = match.groupValues[1]
+                val mediaId = src.substringAfterLast("/")
+                val host = src.substringAfter("https://").substringBefore("/")
 
-                        val apiUrl = "https://$host/api/videos/$mediaId/embed/playback"
+                val apiUrl = "https://$host/api/videos/$mediaId/embed/playback"
 
-                        val response = app.get(apiUrl, headers = mapOf(
-                            "Referer" to data,
-                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                        ))
+                val apiResp = app.get(apiUrl, headers = mapOf(
+                    "Referer" to data,
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                ))
 
-                        if (response.isSuccessful && response.text.isNotBlank()) {
-                            val json = JSONObject(response.text)
-                            if (json.has("sources")) {
-                                val sources = json.getJSONArray("sources")
-                                for (i in 0 until sources.length()) {
-                                    val s = sources.getJSONObject(i)
-                                    val url = s.optString("url") ?: continue
-                                    val label = s.optString("label", "Bysekoze ${i+1}")
+                if (apiResp.isSuccessful) {
+                    val json = JSONObject(apiResp.text)
+                    if (json.has("sources")) {
+                        val sources = json.getJSONArray("sources")
+                        for (i in 0 until sources.length()) {
+                            val s = sources.getJSONObject(i)
+                            val url = s.optString("url") ?: continue
+                            val label = s.optString("label", "Bysekoze ${i+1}")
 
-                                    callback(ExtractorLink(
-                                        source = "Bysekoze",
-                                        name = "Opción 3 - $label",
-                                        url = url,
-                                        referer = src,
-                                        quality = Qualities.Unknown.value,
-                                        isM3u8 = url.contains(".m3u8")
-                                    ))
-                                    foundAny = true
-                                }
-                            }
+                            callback(ExtractorLink(
+                                source = "Bysekoze",
+                                name = "Opción 3 - $label",
+                                url = url,
+                                referer = src,
+                                quality = Qualities.Unknown.value,
+                                isM3u8 = url.contains(".m3u8")
+                            ))
+                            success = true
                         }
-                    } catch (_: Throwable) {}
-
-                    // Fallback
-                    loadExtractor(src, data, subtitleCallback, callback)
-                    foundAny = true
-                }
-
-                // upns.online
-                src.contains("latinlucha.upns.online") -> {
-                    loadExtractor(src, data, subtitleCallback, callback)
-                    foundAny = true
-                }
-
-                // Otros
-                else -> {
-                    loadExtractor(src, data, subtitleCallback, callback)
-                    foundAny = true
+                    }
                 }
             }
         }
 
-        return foundAny
+        // Procesar todos los enlaces encontrados
+        app.postNotification("LatinLuchas: Encontrados ${videoLinks.size} enlaces potenciales")
+
+        videoLinks.distinct().forEach { link ->
+            try {
+                if (loadExtractor(link, data, subtitleCallback, callback)) {
+                    success = true
+                    app.postNotification("Éxito con: $link")
+                }
+            } catch (e: Exception) {
+                // Continuar con el siguiente
+            }
+        }
+
+        return success || videoLinks.isNotEmpty()
     }
 }
