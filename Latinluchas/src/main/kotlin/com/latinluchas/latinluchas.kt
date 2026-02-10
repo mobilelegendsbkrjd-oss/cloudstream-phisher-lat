@@ -20,7 +20,11 @@ class LatinLuchas : MainAPI() {
     ): HomePageResponse {
 
         if (page > 1) {
-            return HomePageResponse(emptyList(), false)
+            return newHomePageResponse(
+                "Eventos y Repeticiones",
+                emptyList(),
+                false
+            )
         }
 
         val document = app.get(mainUrl).document
@@ -38,24 +42,21 @@ class LatinLuchas : MainAPI() {
                     ?: "Evento en vivo"
 
                 results.add(
-                    SearchResponse(
+                    newSearchResponse(
                         title,
                         href,
-                        name,
-                        TvType.Live,
-                        defaultPoster,
-                        null
-                    )
+                        TvType.Live
+                    ) {
+                        posterUrl = defaultPoster
+                    }
                 )
             }
 
-        val home = HomePageList(
+        return newHomePageResponse(
             "Eventos y Repeticiones",
             results,
             false
         )
-
-        return HomePageResponse(listOf(home), false)
     }
 
     override suspend fun load(url: String): LoadResponse? {
@@ -73,13 +74,14 @@ class LatinLuchas : MainAPI() {
                     ?.text()
                 ?: "Transmisión o repetición en TV LatinLuchas"
 
-        return LiveStreamLoadResponse(
+        return newLiveStreamLoadResponse(
             title,
             url,
-            name,
-            defaultPoster,
-            plot
-        )
+            TvType.Live
+        ) {
+            posterUrl = defaultPoster
+            this.plot = plot
+        }
     }
 
     override suspend fun loadLinks(
