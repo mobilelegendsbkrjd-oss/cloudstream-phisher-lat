@@ -20,18 +20,18 @@ class LatinLuchas : MainAPI() {
     ): HomePageResponse {
 
         if (page > 1) {
-            return newHomePageResponse(
-                "Eventos y Repeticiones",
+            return HomePageResponse(
                 emptyList(),
                 false
             )
         }
 
         val document = app.get(mainUrl).document
-        val results = ArrayList<SearchResponse>()
+        val results = mutableListOf<SearchResponse>()
 
         document.select("article, .elementor-post, .post, a[href*='/tv/coli']")
             .forEach { element ->
+
                 val href = element.attr("abs:href")
                 if (!href.contains("/tv/coli")) return@forEach
 
@@ -42,24 +42,29 @@ class LatinLuchas : MainAPI() {
                     ?: "Evento en vivo"
 
                 results.add(
-                    newSearchResponse(
+                    newLiveSearchResponse(
                         title,
                         href,
-                        TvType.Live
-                    ) {
-                        posterUrl = defaultPoster
-                    }
+                        name,
+                        defaultPoster
+                    )
                 )
             }
 
-        return newHomePageResponse(
-            "Eventos y Repeticiones",
-            results,
+        val home = listOf(
+            HomePageList(
+                "Eventos y Repeticiones",
+                results
+            )
+        )
+
+        return HomePageResponse(
+            home,
             false
         )
     }
 
-    override suspend fun load(url: String): LoadResponse? {
+    override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
 
         val title = document.title()
@@ -70,14 +75,12 @@ class LatinLuchas : MainAPI() {
         val plot =
             document.selectFirst("meta[property='og:description']")
                 ?.attr("content")
-                ?: document.selectFirst(".elementor-text-editor, p")
-                    ?.text()
                 ?: "Transmisión o repetición en TV LatinLuchas"
 
         return newLiveStreamLoadResponse(
             title,
             url,
-            TvType.Live
+            name
         ) {
             posterUrl = defaultPoster
             this.plot = plot
