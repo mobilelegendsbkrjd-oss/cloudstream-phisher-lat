@@ -4,7 +4,6 @@ package com.latinluchas
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import org.json.JSONObject
 
 class LatinLuchas : MainAPI() {
     override val name = "TV LatinLuchas"
@@ -24,9 +23,7 @@ class LatinLuchas : MainAPI() {
             val href = element.attr("abs:href").takeIf { it.contains("/tv/coli") } ?: return@mapNotNull null
             val title = element.selectFirst("h2, h3, .entry-title, a")?.text()?.trim() ?: "Evento sin título"
 
-            newSearchResponse(title, href, TvType.Live) {
-                posterUrl = defaultPoster
-            }
+            newSearchResponse(title, href, TvType.Live)
         }.distinctBy { it.url }
 
         return newHomePageResponse {
@@ -68,65 +65,9 @@ class LatinLuchas : MainAPI() {
             if (src.isBlank()) return@forEach
             if (src.startsWith("//")) src = "https:$src"
 
-            when {
-                src.contains("ok.ru/videoembed") -> {
-                    loadExtractor(src, data, subtitleCallback, callback)
-                    foundAny = true
-                }
-
-                src.contains("dailymotion.com/embed/video") -> {
-                    loadExtractor(src, data, subtitleCallback, callback)
-                    foundAny = true
-                }
-
-                src.contains("bysekoze.com") || src.contains("filemoon") -> {
-                    try {
-                        val mediaId = src.substringAfterLast("/")
-                        val host = src.substringAfter("https://").substringBefore("/")
-
-                        val apiUrl = "https://$host/api/videos/$mediaId/embed/playback"
-
-                        val response = app.get(apiUrl, headers = mapOf(
-                            "Referer" to data,
-                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                        ))
-
-                        if (response.isSuccessful) {
-                            val json = JSONObject(response.text)
-                            if (json.has("sources")) {
-                                val sources = json.getJSONArray("sources")
-                                for (i in 0 until sources.length()) {
-                                    val s = sources.getJSONObject(i)
-                                    val url = s.optString("url") ?: continue
-                                    val label = s.optString("label", "Bysekoze ${i+1}")
-
-                                    callback(ExtractorLink(
-                                        source = "Bysekoze",
-                                        name = "Opción 3 - $label",
-                                        url = url,
-                                        referer = src,
-                                        quality = Qualities.Unknown.value,
-                                        isM3u8 = url.contains(".m3u8")
-                                    ))
-                                    foundAny = true
-                                }
-                            }
-                        }
-                    } catch (_: Throwable) {}
-
-                    loadExtractor(src, data, subtitleCallback, callback)
-                    foundAny = true
-                }
-
-                src.contains("latinlucha.upns.online") -> {
-                    loadExtractor(src, data, subtitleCallback, callback)
-                    foundAny = true
-                }
-
-                else -> {
-                    loadExtractor(src, data, subtitleCallback, callback)
-                    foundAny = true
-                }
+            // Delegamos todo a loadExtractor (como en SoloLatino y Tlnovelas)
+            if (loadExtractor(src, data, subtitleCallback, callback)) {
+                foundAny = true
             }
         }
 
