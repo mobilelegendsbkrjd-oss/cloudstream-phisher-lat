@@ -20,46 +20,39 @@ class LatinLuchas : MainAPI() {
     ): HomePageResponse {
 
         if (page > 1) {
-            return HomePageResponse(
-                emptyList(),
-                false
-            )
+            return HomePageResponse(emptyList(), false)
         }
 
         val document = app.get(mainUrl).document
-        val results = mutableListOf<SearchResponse>()
+        val items = mutableListOf<SearchResponse>()
 
-        document.select("article, .elementor-post, .post, a[href*='/tv/coli']")
-            .forEach { element ->
+        document.select("a[href*='/tv/coli']").forEach { element ->
+            val href = element.attr("abs:href")
+            if (href.isBlank()) return@forEach
 
-                val href = element.attr("abs:href")
-                if (!href.contains("/tv/coli")) return@forEach
-
-                val title = element
-                    .selectFirst("h2, h3, .entry-title, a")
-                    ?.text()
-                    ?.trim()
-                    ?: "Evento en vivo"
-
-                results.add(
-                    newLiveSearchResponse(
-                        title,
-                        href,
-                        name,
-                        defaultPoster
-                    )
-                )
+            val title = element.text().trim().ifBlank {
+                "Evento en vivo"
             }
 
-        val home = listOf(
-            HomePageList(
-                "Eventos y Repeticiones",
-                results
-            )
-        )
+            val item = newLiveSearchResponse(
+                title,
+                href,
+                TvType.Live,
+                false
+            ).apply {
+                posterUrl = defaultPoster
+            }
+
+            items.add(item)
+        }
 
         return HomePageResponse(
-            home,
+            listOf(
+                HomePageList(
+                    "Eventos y Repeticiones",
+                    items
+                )
+            ),
             false
         )
     }
@@ -68,14 +61,14 @@ class LatinLuchas : MainAPI() {
         val document = app.get(url).document
 
         val title = document.title()
-            .substringBefore(" - TV LatinLuchas")
+            .substringBefore(" -")
             .trim()
             .ifBlank { "Evento en vivo" }
 
         val plot =
             document.selectFirst("meta[property='og:description']")
                 ?.attr("content")
-                ?: "Transmisión o repetición en TV LatinLuchas"
+                ?: "Transmisión en vivo o repetición"
 
         return newLiveStreamLoadResponse(
             title,
@@ -99,7 +92,6 @@ class LatinLuchas : MainAPI() {
 
         document.select("iframe[src]").forEach { iframe ->
             var src = iframe.attr("abs:src")
-            if (src.isBlank()) return@forEach
             if (src.startsWith("//")) src = "https:$src"
 
             if (loadExtractor(src, data, subtitleCallback, callback)) {
