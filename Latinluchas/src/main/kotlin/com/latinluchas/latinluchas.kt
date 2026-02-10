@@ -60,88 +60,76 @@ class LatinLuchas : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val response = app.get(data).text
-        val videoLinks = mutableSetOf<String>()
-        var success = false
+        val document = app.get(data).document
+        var foundAny = false
 
-        // 1. IFRAMES PRINCIPALES (como en Tlnovelas)
-        val iframePattern = Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
-        iframePattern.findAll(response).forEach { match ->
-            val link = match.groupValues[1]
-            if (!link.contains("ads") && !link.contains("google") && !link.contains("analytics")) {
-                videoLinks.add(link)
-            }
-        }
+        document.select("iframe[src]").forEach { iframe ->
+            var src = iframe.attr("abs:src").trim()
+            if (src.isBlank()) return@forEach
+            if (src.startsWith("//")) src = "https:$src"
 
-        // 2. Búsqueda agresiva de enlaces de video (mp4, m3u8, embed, player, etc.)
-        val directPatterns = listOf(
-            Regex("""https?://[^"'\s]+\.(mp4|m3u8|mkv|avi|mov|flv|wmv|webm)[^"'\s]*""", RegexOption.IGNORE_CASE),
-            Regex("""(https?://[^"'\s]+/v/[/\w\.]+)"""),
-            Regex("""(https?://[^"'\s]+/embed/[/\w\.]+)"""),
-            Regex("""(https?://[^"'\s]+/player/[/\w\.]+)"""),
-            Regex("""(https?://[^"'\s]+/e/[/\w\.]+)""")  // para bysekoze e/...
-        )
+            when {
+                src.contains("ok.ru/videoembed") -> {
+                    loadExtractor(src, data, subtitleCallback, callback)
+                    foundAny = true
+                }
 
-        directPatterns.forEach { pattern ->
-            pattern.findAll(response).forEach { match ->
-                val link = match.value
-                videoLinks.add(link)
-            }
-        }
+                src.contains("dailymotion.com/embed/video") -> {
+                    loadExtractor(src, data, subtitleCallback, callback)
+                    foundAny = true
+                }
 
-        // 3. API específica para bysekoze si detectamos su dominio
-        if (response.contains("bysekoze.com") || response.contains("filemoon")) {
-            val bysekozeMatch = Regex("""src=["'](https?://[^"']*bysekoze[^"']*/e/[^"']+)["']""").find(response)
-            bysekozeMatch?.let { match ->
-                val src = match.groupValues[1]
-                val mediaId = src.substringAfterLast("/")
-                val host = src.substringAfter("https://").substringBefore("/")
+                src.contains("bysekoze.com") || src.contains("filemoon") -> {
+                    try {
+                        val mediaId = src.substringAfterLast("/")
+                        val host = src.substringAfter("https://").substringBefore("/")
 
-                val apiUrl = "https://$host/api/videos/$mediaId/embed/playback"
+                        val apiUrl = "https://$host/api/videos/$mediaId/embed/playback"
 
-                val apiResp = app.get(apiUrl, headers = mapOf(
-                    "Referer" to data,
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-                ))
+                        val response = app.get(apiUrl, headers = mapOf(
+                            "Referer" to data,
+                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                        ))
 
-                if (apiResp.isSuccessful) {
-                    val json = JSONObject(apiResp.text)
-                    if (json.has("sources")) {
-                        val sources = json.getJSONArray("sources")
-                        for (i in 0 until sources.length()) {
-                            val s = sources.getJSONObject(i)
-                            val url = s.optString("url") ?: continue
-                            val label = s.optString("label", "Bysekoze ${i+1}")
+                        if (response.isSuccessful) {
+                            val json = JSONObject(response.text)
+                            if (json.has("sources")) {
+                                val sources = json.getJSONArray("sources")
+                                for (i in 0 until sources.length()) {
+                                    val s = sources.getJSONObject(i)
+                                    val url = s.optString("url") ?: continue
+                                    val label = s.optString("label", "Bysekoze ${i+1}")
 
-                            callback(ExtractorLink(
-                                source = "Bysekoze",
-                                name = "Opción 3 - $label",
-                                url = url,
-                                referer = src,
-                                quality = Qualities.Unknown.value,
-                                isM3u8 = url.contains(".m3u8")
-                            ))
-                            success = true
+                                    callback(ExtractorLink(
+                                        source = "Bysekoze",
+                                        name = "Opción 3 - $label",
+                                        url = url,
+                                        referer = src,
+                                        quality = Qualities.Unknown.value,
+                                        isM3u8 = url.contains(".m3u8")
+                                    ))
+                                    foundAny = true
+                                }
+                            }
                         }
-                    }
+                    } catch (_: Throwable) {}
+
+                    loadExtractor(src, data, subtitleCallback, callback)
+                    foundAny = true
+                }
+
+                src.contains("latinlucha.upns.online") -> {
+                    loadExtractor(src, data, subtitleCallback, callback)
+                    foundAny = true
+                }
+
+                else -> {
+                    loadExtractor(src, data, subtitleCallback, callback)
+                    foundAny = true
                 }
             }
         }
 
-        // Procesar todos los enlaces encontrados
-        app.postNotification("LatinLuchas: Encontrados ${videoLinks.size} enlaces potenciales")
-
-        videoLinks.distinct().forEach { link ->
-            try {
-                if (loadExtractor(link, data, subtitleCallback, callback)) {
-                    success = true
-                    app.postNotification("Éxito con: $link")
-                }
-            } catch (e: Exception) {
-                // Continuar con el siguiente
-            }
-        }
-
-        return success || videoLinks.isNotEmpty()
+        return foundAny
     }
 }
