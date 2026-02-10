@@ -1,54 +1,85 @@
-// Latinluchas/src/main/kotlin/com/latinluchas/LatinLuchas.kt
-
 package com.latinluchas
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 
 class LatinLuchas : MainAPI() {
-    override val name = "TV LatinLuchas"
-    override val mainUrl = "https://tv.latinluchas.com/tv"
-    override val hasMainPage = true
-    override val lang = "es"
-    override val supportedTypes = setOf(TvType.Live)
 
-    private val defaultPoster = "https://tv.latinluchas.com/tv/wp-content/uploads/2026/02/hq720.avif"
+    override var name = "TV LatinLuchas"
+    override var mainUrl = "https://tv.latinluchas.com/tv"
+    override var lang = "es"
+    override var hasMainPage = true
+    override var supportedTypes = setOf(TvType.Live)
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        if (page > 1) return newHomePageResponse { list(emptyList()) }
+    private val defaultPoster =
+        "https://tv.latinluchas.com/tv/wp-content/uploads/2026/02/hq720.avif"
+
+    override suspend fun getMainPage(
+        page: Int,
+        request: MainPageRequest
+    ): HomePageResponse {
+
+        if (page > 1) {
+            return HomePageResponse(emptyList(), false)
+        }
 
         val document = app.get(mainUrl).document
+        val results = ArrayList<SearchResponse>()
 
-        val home = document.select("article, .elementor-post, .post, a[href*='/tv/coli']").mapNotNull { element ->
-            val href = element.attr("abs:href").takeIf { it.contains("/tv/coli") } ?: return@mapNotNull null
-            val title = element.selectFirst("h2, h3, .entry-title, a")?.text()?.trim() ?: "Evento sin título"
+        document.select("article, .elementor-post, .post, a[href*='/tv/coli']")
+            .forEach { element ->
+                val href = element.attr("abs:href")
+                if (!href.contains("/tv/coli")) return@forEach
 
-            newSearchResponse(title, href, TvType.Live)
-        }.distinctBy { it.url }
+                val title = element
+                    .selectFirst("h2, h3, .entry-title, a")
+                    ?.text()
+                    ?.trim()
+                    ?: "Evento en vivo"
 
-        return newHomePageResponse {
-            name = "Eventos y Repeticiones"
-            list(home)
-        }
+                results.add(
+                    SearchResponse(
+                        title,
+                        href,
+                        name,
+                        TvType.Live,
+                        defaultPoster,
+                        null
+                    )
+                )
+            }
+
+        val home = HomePageList(
+            "Eventos y Repeticiones",
+            results,
+            false
+        )
+
+        return HomePageResponse(listOf(home), false)
     }
 
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
-        val title = document.title().substringBefore(" - TV LatinLuchas").trim()
+        val title = document.title()
+            .substringBefore(" - TV LatinLuchas")
+            .trim()
             .ifBlank { "Evento en vivo" }
 
-        val plot = document.selectFirst("meta[property='og:description']")?.attr("content")
-            ?: document.selectFirst(".elementor-widget-container p, .elementor-text-editor")?.text()
-            ?: "Repetición o transmisión en vivo - TV LatinLuchas"
+        val plot =
+            document.selectFirst("meta[property='og:description']")
+                ?.attr("content")
+                ?: document.selectFirst(".elementor-text-editor, p")
+                    ?.text()
+                ?: "Transmisión o repetición en TV LatinLuchas"
 
-        return newLiveStreamLoadResponse(title) {
-            this.url = url
-            apiName = name
-            type = TvType.Live
-            posterUrl = defaultPoster
-            this.plot = plot
-        }
+        return LiveStreamLoadResponse(
+            title,
+            url,
+            name,
+            defaultPoster,
+            plot
+        )
     }
 
     override suspend fun loadLinks(
@@ -57,20 +88,20 @@ class LatinLuchas : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+
         val document = app.get(data).document
-        var foundAny = false
+        var found = false
 
         document.select("iframe[src]").forEach { iframe ->
-            var src = iframe.attr("abs:src").trim()
+            var src = iframe.attr("abs:src")
             if (src.isBlank()) return@forEach
             if (src.startsWith("//")) src = "https:$src"
 
-            // Delegamos todo a loadExtractor (como en SoloLatino y Tlnovelas)
             if (loadExtractor(src, data, subtitleCallback, callback)) {
-                foundAny = true
+                found = true
             }
         }
 
-        return foundAny
+        return found
     }
 }
