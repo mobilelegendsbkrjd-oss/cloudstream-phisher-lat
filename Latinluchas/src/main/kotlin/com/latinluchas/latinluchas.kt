@@ -24,7 +24,7 @@ class LatinLuchas : MainAPI() {
 
         val document = app.get(mainUrl).document
 
-        val home = document
+        val items = document
             .select("article, .elementor-post, .post, a[href*='/tv/coli']")
             .mapNotNull { element ->
                 val href = element.attr("abs:href")
@@ -44,7 +44,7 @@ class LatinLuchas : MainAPI() {
 
         return newHomePageResponse(
             listOf(
-                HomePageList("Eventos y Repeticiones", home)
+                HomePageList("Eventos y Repeticiones", items)
             )
         )
     }
@@ -68,11 +68,10 @@ class LatinLuchas : MainAPI() {
         return newLiveStreamLoadResponse(
             title,
             url,
-            name,
-            url,
-            defaultPoster
+            url
         ) {
             this.plot = plot
+            this.posterUrl = defaultPoster
         }
     }
 
