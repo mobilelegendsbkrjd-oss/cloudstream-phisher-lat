@@ -113,3 +113,4 @@ fun fixHostsLinks(url: String): String {
         .replaceFirst("https://lulu.st", "https://lulustream.com")
         .replaceFirst("https://uqload.io", "https://uqload.com")
         .replaceFirst("https://do7go.com", "https://dood.la")
+}
