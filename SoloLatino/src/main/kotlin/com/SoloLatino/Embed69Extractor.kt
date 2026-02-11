@@ -28,28 +28,48 @@ object Embed69Extractor {
             ?.substringBefore(";")?.let {
                 val parsed = AppUtils.tryParseJson<List<ServersByLang>>(it)
                 
-                // ORDENAMIENTO: Definimos prioridades para los idiomas
-                val sortedList = parsed?.sortedBy { lang ->
+                // 1. ORDENAR POR IDIOMA (LAT > SUB > CAS)
+                val sortedLanguages = parsed?.sortedBy { lang ->
                     val name = lang.videoLanguage?.uppercase() ?: ""
                     when {
-                        name.contains("LAT") -> 1 // Primero Latino
-                        name.contains("SUB") -> 2 // Luego Subtitulado
-                        name.contains("CAS") -> 3 // Luego Castellano
-                        else -> 4                 // Lo demás al final
+                        name.contains("LAT") -> 1
+                        name.contains("SUB") -> 2
+                        name.contains("CAS") -> 3
+                        else -> 4
                     }
                 }
 
-                sortedList?.amap { lang ->
+                sortedLanguages?.forEach { lang ->
+                    // Mantenemos el orden de los embeds originales pero preparando la carga
                     val jsonData = LinksRequest(lang.sortedEmbeds.amap { it.link!! })
                     val body = jsonData.toJson()
                         .toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+                    
                     val decrypted = app.post("https://embed69.org/api/decrypt", requestBody = body)
                         .parsedSafe<Loadlinks>()
+
                     if (decrypted?.success == true) {
-                        decrypted.links.amap {
+                        
+                        // 2. ORDENAR LINKS DENTRO DEL IDIOMA
+                        // Buscamos específicamente "MP4" para ponerlo arriba de todo
+                        val sortedLinks = decrypted.links.sortedBy { linkItem ->
+                            val linkUrl = linkItem.link.lowercase()
+                            val isVoe = linkUrl.contains("voe")
+                            val isMp4 = linkUrl.contains("mp4")
+
+                            when {
+                                isVoe && isMp4 -> 1  // PRIORIDAD MÁXIMA: VOE MP4
+                                isVoe -> 2           // VOE (Otras versiones como 720, 1080)
+                                linkUrl.contains("filemoon") -> 3
+                                linkUrl.contains("streamwish") -> 4
+                                else -> 5            // El resto
+                            }
+                        }
+
+                        sortedLinks.forEach { linkItem ->
                             loadSourceNameExtractor(
                                 lang.videoLanguage!!,
-                                fixHostsLinks(it.link),
+                                fixHostsLinks(linkItem.link),
                                 referer,
                                 subtitleCallback,
                                 callback
@@ -72,9 +92,7 @@ data class ServersByLang(
     @JsonProperty("sortedEmbeds") val sortedEmbeds: List<Server> = emptyList<Server>(),
 )
 
-data class LinksRequest(
-    val links: List<String>,
-)
+data class LinksRequest(val links: List<String>)
 
 data class Loadlinks(
     val success: Boolean,
@@ -94,21 +112,20 @@ suspend fun loadSourceNameExtractor(
     callback: (ExtractorLink) -> Unit,
 ) {
     loadExtractor(url, referer, subtitleCallback) { link ->
-        CoroutineScope(Dispatchers.IO).launch {
-            callback.invoke(
-                newExtractorLink(
-                    "$source[${link.source}]",
-                    "$source[${link.source}]",
-                    link.url,
-                ) {
-                    this.quality = link.quality
-                    this.type = link.type
-                    this.referer = link.referer
-                    this.headers = link.headers
-                    this.extractorData = link.extractorData
-                }
-            )
-        }
+        // Invocación directa para preservar el orden secuencial del bucle superior
+        callback.invoke(
+            newExtractorLink(
+                "$source[${link.source}]",
+                "$source[${link.source}]",
+                link.url,
+            ) {
+                this.quality = link.quality
+                this.type = link.type
+                this.referer = link.referer
+                this.headers = link.headers
+                this.extractorData = link.extractorData
+            }
+        )
     }
 }
 
