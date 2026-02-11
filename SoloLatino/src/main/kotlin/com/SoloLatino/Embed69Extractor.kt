@@ -26,7 +26,20 @@ object Embed69Extractor {
             .firstOrNull { it.html().contains("dataLink = [") }?.html()
             ?.substringAfter("dataLink = ")
             ?.substringBefore(";")?.let {
-                AppUtils.tryParseJson<List<ServersByLang>>(it)?.amap { lang ->
+                val parsed = AppUtils.tryParseJson<List<ServersByLang>>(it)
+                
+                // ORDENAMIENTO: Definimos prioridades para los idiomas
+                val sortedList = parsed?.sortedBy { lang ->
+                    val name = lang.videoLanguage?.uppercase() ?: ""
+                    when {
+                        name.contains("LAT") -> 1 // Primero Latino
+                        name.contains("SUB") -> 2 // Luego Subtitulado
+                        name.contains("CAS") -> 3 // Luego Castellano
+                        else -> 4                 // Lo demás al final
+                    }
+                }
+
+                sortedList?.amap { lang ->
                     val jsonData = LinksRequest(lang.sortedEmbeds.amap { it.link!! })
                     val body = jsonData.toJson()
                         .toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
