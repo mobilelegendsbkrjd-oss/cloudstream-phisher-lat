@@ -26,8 +26,6 @@ object Embed69Extractor {
             .firstOrNull { it.html().contains("dataLink = [") }?.html()
             ?.substringAfter("dataLink = ")
             ?.substringBefore(";")?.let {
-                val allLinks = mutableListOf<ExtractorLink>()
-
                 AppUtils.tryParseJson<List<ServersByLang>>(it)?.amap { lang ->
                     val jsonData = LinksRequest(lang.sortedEmbeds.amap { it.link!! })
                     val body = jsonData.toJson()
@@ -41,32 +39,11 @@ object Embed69Extractor {
                                 fixHostsLinks(it.link),
                                 referer,
                                 subtitleCallback,
-                                // Cambiamos callback por recolector temporal
-                                { processedLink ->
-                                    allLinks.add(processedLink)
-                                }
+                                callback
                             )
                         }
                     }
                 }
-
-                // Orden LAT > SUB > CAS > resto (solo esto se agregó)
-                val priorityMap = mapOf(
-                    "LAT" to 0,
-                    "LATINO" to 0,
-                    "SUB" to 1,
-                    "SUBTITULADO" to 1,
-                    "CAS" to 2,
-                    "CAST" to 2,
-                    "CASTELLANO" to 2
-                )
-
-                val sortedLinks = allLinks.sortedBy { link ->
-                    val upperName = link.name.uppercase()
-                    priorityMap.entries.firstOrNull { it.key in upperName }?.value ?: 999
-                }
-
-                sortedLinks.forEach { callback(it) }
             }
     }
 }
@@ -107,8 +84,8 @@ suspend fun loadSourceNameExtractor(
         CoroutineScope(Dispatchers.IO).launch {
             callback.invoke(
                 newExtractorLink(
-                    "\( source[ \){link.source}]",
-                    "\( source[ \){link.source}]",
+                    "$source[${link.source}]",
+                    "$source[${link.source}]",
                     link.url,
                 ) {
                     this.quality = link.quality
