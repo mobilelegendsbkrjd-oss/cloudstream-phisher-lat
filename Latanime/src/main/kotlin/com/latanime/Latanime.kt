@@ -22,7 +22,6 @@ import com.lagradost.cloudstream3.newAnimeSearchResponse
 import com.lagradost.cloudstream3.newEpisode
 import com.lagradost.cloudstream3.newHomePageResponse
 import com.lagradost.cloudstream3.newMovieLoadResponse
-import com.lagradost.cloudstream3.newTvSeriesLoadResponse
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
@@ -34,7 +33,7 @@ class Latanime : MainAPI() {
     override var lang                 = "es-mx"
     override val hasDownloadSupport   = true
     override val hasQuickSearch       = true
-    override val supportedTypes       = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA, TvType.TvSeries)
+    override val supportedTypes       = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA)
 
     // URL del JSON con categorías personalizadas
     private val categoriesJsonUrl = "https://raw.githubusercontent.com/mobilelegendsbkrjd-oss/lat_cs_bkrjd/main/ListaLA.json"
@@ -96,7 +95,7 @@ class Latanime : MainAPI() {
                     
                     // SIN FILTROS - mostrar todo tal cual
                     categoryItems.add(
-                        newAnimeSearchResponse(title, url, TvType.TvSeries) {
+                        newAnimeSearchResponse(title, url, TvType.Anime) {
                             this.posterUrl = poster
                             // Dejar que el sitio maneje los filtros
                             addDubStatus(DubStatus.Subbed)
@@ -113,9 +112,9 @@ class Latanime : MainAPI() {
         } catch (e: Exception) {
             // Si falla la carga del JSON, mostrar categorías por defecto
             val defaultCategories = listOf(
-                newAnimeSearchResponse("🎭 Acción Latino", "https://latanime.org/animes?genero=accion&categoria=latino&p=1", TvType.TvSeries),
-                newAnimeSearchResponse("💖 Romance Latino", "https://latanime.org/animes?genero=romance&categoria=latino&p=1", TvType.TvSeries),
-                newAnimeSearchResponse("😂 Comedia Latino", "https://latanime.org/animes?genero=comedia&categoria=latino&p=1", TvType.TvSeries)
+                newAnimeSearchResponse("🎭 Acción Latino", "https://latanime.org/animes?genero=accion&categoria=latino&p=1", TvType.Anime),
+                newAnimeSearchResponse("💖 Romance Latino", "https://latanime.org/animes?genero=romance&categoria=latino&p=1", TvType.Anime),
+                newAnimeSearchResponse("😂 Comedia Latino", "https://latanime.org/animes?genero=comedia&categoria=latino&p=1", TvType.Anime)
             )
             items.add(HomePageList("📚 Categorias", defaultCategories, true))
         }
@@ -143,29 +142,24 @@ class Latanime : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        // Si es una URL de categoría del JSON
+        // Si es una URL de categoría del JSON, cargar con recomendaciones
         if (url.contains("https://latanime.org/animes?genero=")) {
-            return loadCategoryWithAllRecommendations(url)
+            return loadCategoryWithRecommendations(url)
         }
         
+        // Carga NORMAL de anime/película
         val document    = app.get(url).documentLarge
-        val rawTitle    = document.selectFirst("h2")?.text()?.trim() ?: "Desconocido"
-        val title       = rawTitle
+        val title       = document.selectFirst("h2")?.text() ?: "Desconocido"
         val poster      = document.selectFirst("meta[property=og:image]")?.attr("content")?.trim()
         val description = document.selectFirst("h2 ~ p.my-2")?.text()
         val tags        = document.select("a div.btn").map { it.text() }
         val year        = document.select(".span-tiempo").text().substringAfterLast(" de ").toIntOrNull()
         val epsAnchor   = document.select("div.row a[href*='/ver/']")
-
-        // Obtener recomendaciones del HTML
-        val recommendations = getRecommendationsFromPage(document)
         
-        // Detectar si es película (solo un episodio) o serie
-        val isMovie = url.contains("/pelicula") || url.contains("/movie") || 
-                     rawTitle.contains("Película", true) ||
-                     epsAnchor.size <= 1
+        // Extraer recomendaciones del HTML
+        val recommendations = extractRecommendations(document)
 
-        return if (!isMovie && epsAnchor.size > 1) {
+        return if (epsAnchor.size > 1) {
             // Es una serie
             val episodes: List<Episode>? = epsAnchor.map {
                 val epPoster = it.select("img").attr("data-src")
@@ -184,15 +178,15 @@ class Latanime : MainAPI() {
                 this.year = year
                 // Agregar recomendaciones si hay
                 if (recommendations.isNotEmpty()) {
-                    this.recommendations = recommendations
+                    this.recommendations = recommendations.take(30) // Limitar a 30
                 }
             }
         } else {
             // Es una película, OVA o especial
             val movieUrl = epsAnchor.firstOrNull()?.attr("href") ?: url
             val type = when {
-                url.contains("/ova/", true) || rawTitle.contains("OVA", true) -> TvType.OVA
-                url.contains("/especial/", true) || rawTitle.contains("Especial", true) -> TvType.OVA
+                url.contains("/ova/", true) || title.contains("OVA", true) -> TvType.OVA
+                url.contains("/especial/", true) || title.contains("Especial", true) -> TvType.OVA
                 else -> TvType.AnimeMovie
             }
             
@@ -203,115 +197,103 @@ class Latanime : MainAPI() {
                 this.year = year
                 // Agregar recomendaciones si hay
                 if (recommendations.isNotEmpty()) {
-                    this.recommendations = recommendations
+                    this.recommendations = recommendations.take(30) // Limitar a 30
                 }
             }
         }
     }
 
-    // Función para cargar categorías con TODAS las recomendaciones
-    private suspend fun loadCategoryWithAllRecommendations(url: String): LoadResponse {
-        // Extraer información básica
-        val categoryName = url.substringAfter("genero=").substringBefore("&")
-            .replace("-", " ").replaceFirstChar { it.uppercase() }
-        
-        val isLatino = url.contains("categoria=latino")
-        val displayName = if (isLatino) "$categoryName Latino" else categoryName
-        
-        // Cargar TODAS las páginas (hasta donde sea posible)
-        val allResults = mutableListOf<SearchResponse>()
-        var currentPage = 1
-        var hasMorePages = true
-        val maxAttempts = 100 // Máximo de páginas a intentar cargar
-        
-        while (hasMorePages && currentPage <= maxAttempts) {
-            try {
-                val pageUrl = if (url.contains("&p=")) {
-                    url.replace(Regex("&p=\\d+"), "&p=$currentPage")
-                } else {
-                    "$url&p=$currentPage"
-                }
-                
-                val document = app.get(pageUrl, timeout = 30).documentLarge
-                val pageResults = document.select("div.row a").mapNotNull { element ->
-                    element.toSearchResult()
-                }
-                
-                if (pageResults.isNotEmpty()) {
-                    allResults.addAll(pageResults)
-                    currentPage++
-                    
-                    // Verificar si hay más páginas
-                    val pagination = document.select("ul.pagination")
-                    hasMorePages = pagination.isNotEmpty()
-                    
-                    // Pequeña pausa para no sobrecargar
-                    kotlinx.coroutines.delay(50)
-                } else {
-                    hasMorePages = false
-                }
-            } catch (e: Exception) {
-                // Si falla una página, asumir que no hay más
-                hasMorePages = false
-            }
+    // Función para cargar categorías con recomendaciones
+    private suspend fun loadCategoryWithRecommendations(url: String): LoadResponse {
+        // Extraer número de página
+        val pageMatch = Regex("&p=(\\d+)").find(url)
+        val currentPage = pageMatch?.groupValues?.get(1)?.toIntOrNull() ?: 1
+        val baseUrl = if (pageMatch != null) {
+            url.replace(Regex("&p=\\d+"), "")
+        } else {
+            url
         }
         
-        // Eliminar duplicados
-        val uniqueResults = allResults.distinctBy { it.url }
+        // Cargar la página
+        val fullUrl = if (baseUrl.contains("&p=")) baseUrl else "$baseUrl&p=$currentPage"
+        val document = app.get(fullUrl).documentLarge
         
-        // Crear descripción
-        val plot = "📚 $displayName\n" +
-                  "📊 Total de animes cargados: ${uniqueResults.size}\n" +
-                  "📄 Páginas escaneadas: ${currentPage - 1}\n\n" +
-                  "Todos los animes aparecerán como sugerencias debajo."
+        // Obtener resultados de la página
+        val results = document.select("div.row a").mapNotNull { element ->
+            element.toSearchResult()
+        }
         
-        // Usar newTvSeriesLoadResponse con episodios vacíos y TODAS las recomendaciones
-        return newTvSeriesLoadResponse(
-            "📚 $displayName",
-            url,
-            TvType.TvSeries,
-            emptyList() // Episodios vacíos
-        ) {
+        // Crear nombre de categoría
+        val categoryName = Regex("genero=([^&]+)").find(url)?.groupValues?.get(1)
+            ?.replace("-", " ")
+            ?.split(" ")
+            ?.joinToString(" ") { it.replaceFirstChar { char -> char.uppercase() } }
+            ?: "Categoría"
+        
+        // Información de paginación
+        val pagination = document.select("ul.pagination li a")
+        val totalPages = if (pagination.isNotEmpty()) {
+            pagination.mapNotNull { it.text().toIntOrNull() }.maxOrNull() ?: 1
+        } else {
+            1
+        }
+        
+        // Descripción informativa
+        val plot = buildString {
+            append("📚 $categoryName\n")
+            append("📄 Página: $currentPage de $totalPages\n")
+            append("🎬 Mostrando: ${results.size} animes\n")
+            append("\n")
+            append("Los animes aparecerán como sugerencias debajo.")
+        }
+        
+        return newAnimeLoadResponse("📚 $categoryName", url, TvType.Anime) {
             this.posterUrl = null
             this.plot = plot
-            this.tags = listOf("Categoría", if (isLatino) "Latino" else "Subtitulado")
+            this.tags = listOf("Categoría", "Explorar")
             
-            // Agregar TODOS los resultados como recomendaciones
-            this.recommendations = uniqueResults
+            // Agregar episodios vacíos para evitar "Próximamente"
+            addEpisodes(DubStatus.Subbed, emptyList())
+            
+            // Agregar resultados como recomendaciones (limitado a 30)
+            if (results.isNotEmpty()) {
+                this.recommendations = results.take(30)
+            }
         }
     }
     
-    // Función para extraer recomendaciones de la página HTML
-    private fun getRecommendationsFromPage(document: org.jsoup.nodes.Document): List<SearchResponse> {
+    // Función para extraer recomendaciones del HTML
+    private fun extractRecommendations(document: org.jsoup.nodes.Document): List<SearchResponse> {
         val recommendations = mutableListOf<SearchResponse>()
         
         try {
-            // Buscar en la sección de recomendaciones
+            // Intentar extraer de la sección de recomendaciones (si existe)
             document.select(".recomendados a, .sugerencias a, .recommendations a").forEach { element ->
-                val result = element.toSearchResult()
-                if (result != null) {
-                    recommendations.add(result)
+                element.toSearchResult()?.let {
+                    recommendations.add(it)
                 }
             }
             
-            // Si no hay en sección específica, buscar enlaces generales que puedan ser recomendaciones
-            if (recommendations.isEmpty()) {
-                document.select("a[href*='/anime/']").forEach { element ->
-                    // Filtrar que no sea el anime actual
+            // Si no hay suficientes, buscar en otros lugares
+            if (recommendations.size < 10) {
+                document.select("div.row a").forEach { element ->
                     val href = element.attr("href")
-                    if (href.contains("/anime/") && !href.contains("#")) {
-                        val result = element.toSearchResult()
-                        if (result != null && recommendations.size < 20) { // Limitar a 20
-                            recommendations.add(result)
+                    // Evitar enlaces del contenido actual
+                    if (href.isNotBlank() && !href.contains("/ver/") && recommendations.size < 30) {
+                        element.toSearchResult()?.let {
+                            // Evitar duplicados
+                            if (recommendations.none { rec -> rec.url == it.url }) {
+                                recommendations.add(it)
+                            }
                         }
                     }
                 }
             }
         } catch (e: Exception) {
-            // Si falla, retornar lista vacía
+            // Ignorar errores
         }
         
-        return recommendations.distinctBy { it.url } // Eliminar duplicados
+        return recommendations.distinctBy { it.url }.take(30) // Máximo 30 recomendaciones
     }
 
     override suspend fun loadLinks(
