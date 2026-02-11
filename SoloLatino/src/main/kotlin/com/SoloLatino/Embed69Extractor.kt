@@ -2,7 +2,7 @@ package com.sololatino
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.cloudstream3.utils.AppUtils
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
@@ -18,29 +18,25 @@ object Embed69Extractor {
         callback: (ExtractorLink) -> Unit
     ) {
         val doc = app.get(url).document
-        val scriptContent = doc.select("script")
-            .firstOrNull { it.html().contains("dataLink = [") }
-            ?.html() ?: return
+        val script = doc.select("script")
+            .firstOrNull { it.html().contains("dataLink = [") } ?: return
 
-        val jsonStr = scriptContent
-            .substringAfter("dataLink = ")
-            .substringBefore(";")
-            .trim()
+        val scriptHtml = script.html()
+        val jsonStr = scriptHtml.substringAfter("dataLink = ").substringBefore(";").trim()
 
         val serversByLang = AppUtils.tryParseJson<List<ServersByLang>>(jsonStr) ?: return
 
         val allLinks = mutableListOf<ExtractorLink>()
 
-        serversByLang.amap { lang ->
-            val jsonData = LinksRequest(lang.sortedEmbeds.mapNotNull { it.link })
+        serversByLang.amap { lang: ServersByLang ->
+            val embeds = lang.sortedEmbeds.mapNotNull { it.link }
+            if (embeds.isEmpty()) return@amap
+
+            val jsonData = LinksRequest(embeds)
             val body = jsonData.toJson()
                 .toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
 
-            val decryptedResponse = app.post(
-                "https://embed69.org/api/decrypt",
-                requestBody = body
-            )
-
+            val decryptedResponse = app.post("https://embed69.org/api/decrypt", requestBody = body)
             val decrypted = decryptedResponse.parsedSafe<Loadlinks>() ?: return@amap
 
             if (decrypted.success) {
@@ -68,7 +64,7 @@ object Embed69Extractor {
             }
         }
 
-        // Orden forzado: LAT > SUB > CAS > resto
+        // Orden LAT > SUB > CAS > resto
         val priorityMap = mapOf(
             "LAT" to 0,
             "LATINO" to 0,
@@ -77,15 +73,13 @@ object Embed69Extractor {
             "CAS" to 2,
             "CAST" to 2,
             "CASTELLANO" to 2,
-            "ESP" to 2,          // por si usan ESP para castellano
+            "ESP" to 2,
             "ES" to 2
         )
 
         val sortedLinks = allLinks.sortedBy { link ->
             val upperName = link.name.uppercase()
-            priorityMap.entries
-                .firstOrNull { it.key in upperName }
-                ?.value ?: 999
+            priorityMap.entries.firstOrNull { (key, _) -> key in upperName }?.value ?: 999
         }
 
         sortedLinks.forEach { callback(it) }
