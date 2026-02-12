@@ -28,14 +28,15 @@ object Embed69Extractor {
             ?.substringBefore(";")?.let {
                 val parsed = AppUtils.tryParseJson<List<ServersByLang>>(it)
                 
-                // 1. ORDENAR POR IDIOMA
+                // 1. ORDENAR POR IDIOMA (LAT > SUB > ESP > CAS > OTROS)
                 val sortedLanguages = parsed?.sortedBy { lang ->
                     val name = lang.videoLanguage?.uppercase() ?: ""
                     when {
                         name.contains("LAT") -> 1
                         name.contains("SUB") -> 2
-                        name.contains("CAS") -> 3
-                        else -> 4
+                        name.contains("ESP") -> 3
+                        name.contains("CAS") -> 4
+                        else -> 5
                     }
                 }
 
@@ -108,10 +109,7 @@ suspend fun loadSourceNameExtractor(
     subtitleCallback: (SubtitleFile) -> Unit,
     callback: (ExtractorLink) -> Unit,
 ) {
-    // Re-añadimos el CoroutineScope pero dentro de la lógica del extractor
-    // para que sea compatible con las suspension functions
     loadExtractor(url, referer, subtitleCallback) { link ->
-        // Usamos Main o IO, pero lo lanzamos para que el callback (que es suspend) funcione
         CoroutineScope(Dispatchers.IO).launch {
             callback.invoke(
                 newExtractorLink(
