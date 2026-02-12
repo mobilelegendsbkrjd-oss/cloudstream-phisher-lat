@@ -26,12 +26,6 @@ class SoloLatino : MainAPI() {
     private val sagasJsonUrl = "https://raw.githubusercontent.com/mobilelegendsbkrjd-oss/lat_cs_bkrjd/main/ListasSL.json"
     private val seriesCuradasJsonUrl = "https://raw.githubusercontent.com/mobilelegendsbkrjd-oss/lat_cs_bkrjd/main/seriesSL.json"
 
-    data class GitHubItem(
-        @JsonProperty("title") val title: String? = null,
-        @JsonProperty("url") val url: String? = null,
-        @JsonProperty("poster") val poster: String? = null
-    )
-
     @Suppress("DEPRECATION")
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? = coroutineScope {
         val sections = listOf(
@@ -50,53 +44,78 @@ class SoloLatino : MainAPI() {
             "📚 Categorias (solo TV)" to seriesCuradasJsonUrl
         )
 
-        // SOLUCIÓN: Usamos async/awaitAll en lugar de apmap para carga paralela compatible
-        val items = sections.map { (name, url) ->
-            async {
-                try {
-                    val tvType = when (name) {
-                        "🎥 Películas" -> TvType.Movie
-                        else -> TvType.TvSeries
-                    }
+        val items = ArrayList<HomePageList>()
 
-                    val home = if (name == "🔥 Sagas" || name == "📚 Categorias (solo TV)") {
-                        try {
-                            val jsonText = app.get(url, timeout = 20).text
-                            val parsed = AppUtils.tryParseJson<List<GitHubItem>>(jsonText)
-                            
-                            parsed?.mapNotNull { item ->
-                                val title = item.title ?: return@mapNotNull null
-                                val link = item.url ?: return@mapNotNull null
-                                newTvSeriesSearchResponse(title, link, tvType) {
-                                    this.posterUrl = item.poster
-                                }
-                            } ?: emptyList()
-                        } catch (e: Exception) {
-                            emptyList()
+        // CORRECCIÓN: Usamos 'chunked(3)' para pedir de 3 en 3.
+        // Pedir todo junto bloquea el servidor, pedir 1 por 1 es muy lento.
+        // 3 es el equilibrio perfecto.
+        sections.chunked(3).forEach { batch ->
+            val batchItems = batch.map { (name, url) ->
+                async {
+                    try {
+                        val tvType = when (name) {
+                            "🎥 Películas" -> TvType.Movie
+                            else -> TvType.TvSeries
                         }
-                    } else {
-                        val finalUrl = if (page > 1) "$url/page/$page/" else url
-                        val doc = app.get(finalUrl).document
-                        doc.select("div.items article.item").mapNotNull {
-                            val title = it.selectFirst("a div.data h3")?.text() ?: return@mapNotNull null
-                            val link = it.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-                            val img = it.selectFirst("div.poster img.lazyload")?.attr("data-srcset")
-                            newTvSeriesSearchResponse(title, link, tvType, true) {
-                                this.posterUrl = img
+
+                        val home = if (name == "🔥 Sagas" || name == "📚 Categorias (solo TV)") {
+                            try {
+                                // RESTAURADO: Tu lógica original con Regex para leer el JSON "sucio" sin errores
+                                val jsonText = app.get(url, timeout = 20).text.trim()
+                                val sagas = mutableListOf<SearchResponse>()
+                                val cleanJson = jsonText.removePrefix("[").removeSuffix("]").trim()
+                                
+                                if (cleanJson.isNotEmpty()) {
+                                    val objetos = cleanJson.split("},").map { it.trim() + "}" }
+                                    objetos.forEach { objStr ->
+                                        try {
+                                            val titleMatch = Regex(""""title"\s*:\s*"([^"]*)"""").find(objStr)
+                                            val urlMatch = Regex(""""url"\s*:\s*"([^"]*)"""").find(objStr)
+                                            val posterMatch = Regex(""""poster"\s*:\s*"([^"]*)"""").find(objStr)
+
+                                            val title = titleMatch?.groupValues?.get(1) ?: return@forEach
+                                            val link = urlMatch?.groupValues?.get(1) ?: return@forEach
+                                            val poster = posterMatch?.groupValues?.get(1)
+
+                                            sagas.add(
+                                                newTvSeriesSearchResponse(title, link, tvType) {
+                                                    this.posterUrl = poster
+                                                }
+                                            )
+                                        } catch (e: Exception) {}
+                                    }
+                                }
+                                sagas
+                            } catch (e: Exception) {
+                                emptyList()
+                            }
+                        } else {
+                            // Aumenté el timeout a 30s por si el servidor tarda en responder los lotes
+                            val finalUrl = if (page > 1) "$url/page/$page/" else url
+                            val doc = app.get(finalUrl, timeout = 30).document
+                            doc.select("div.items article.item").mapNotNull {
+                                val title = it.selectFirst("a div.data h3")?.text() ?: return@mapNotNull null
+                                val link = it.selectFirst("a")?.attr("href") ?: return@mapNotNull null
+                                val img = it.selectFirst("div.poster img.lazyload")?.attr("data-srcset")
+                                newTvSeriesSearchResponse(title, link, tvType, true) {
+                                    this.posterUrl = img
+                                }
                             }
                         }
-                    }
 
-                    if (home.isNotEmpty()) {
-                        HomePageList(name, home)
-                    } else {
+                        if (home.isNotEmpty()) {
+                            HomePageList(name, home)
+                        } else {
+                            null
+                        }
+                    } catch (e: Exception) {
                         null
                     }
-                } catch (e: Exception) {
-                    null
                 }
-            }
-        }.awaitAll().filterNotNull()
+            }.awaitAll().filterNotNull() // Esperamos a que terminen los 3 de este lote
+            
+            items.addAll(batchItems)
+        }
 
         return@coroutineScope newHomePageResponse(items)
     }
@@ -250,7 +269,6 @@ class SoloLatino : MainAPI() {
                 val regex = """(go_to_player|go_to_playerVast)\('(.*?)'""".toRegex()
                 val html = app.get(iframeSrc).text
                 
-                // SOLUCIÓN: Carga paralela corregida
                 regex.findAll(html).map { it.groupValues.get(2) }
                     .toList()
                     .map { link ->
@@ -266,8 +284,8 @@ class SoloLatino : MainAPI() {
         }
         return@coroutineScope true
     }
-
-    // Agregamos esta función aquí para evitar errores de referencia si no la encuentra en el otro archivo
+    
+    // Función auxiliar para fixHostsLinks dentro de la clase
     private fun fixHostsLinks(url: String): String {
         return url
             .replaceFirst("https://hglink.to", "https://streamwish.to")
@@ -283,7 +301,7 @@ class SoloLatino : MainAPI() {
             .replaceFirst("https://uqload.io", "https://uqload.com")
             .replaceFirst("https://do7go.com", "https://dood.la")
     }
-    
+
     private data class EpisodeData(
         val url: String,
         val title: String,
