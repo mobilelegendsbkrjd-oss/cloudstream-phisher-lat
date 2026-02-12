@@ -41,7 +41,7 @@ class SoloLatino : MainAPI() {
             "🟣 HBO Max" to "$mainUrl/network/hbo-max/",
             "🍎 Apple TV" to "$mainUrl/network/apple-tv/",
             "🟢 Hulu" to "$mainUrl/network/hulu/",
-            "📚 Categorias (solo TV)" to seriesCuradasJsonUrl
+            "📚 Sugerencias Comunidad" to seriesCuradasJsonUrl
         )
 
         val items = ArrayList<HomePageList>()
