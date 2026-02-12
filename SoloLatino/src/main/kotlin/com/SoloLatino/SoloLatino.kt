@@ -5,6 +5,9 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 class SoloLatino : MainAPI() {
     override var mainUrl = "https://sololatino.net"
@@ -23,7 +26,6 @@ class SoloLatino : MainAPI() {
     private val sagasJsonUrl = "https://raw.githubusercontent.com/mobilelegendsbkrjd-oss/lat_cs_bkrjd/main/ListasSL.json"
     private val seriesCuradasJsonUrl = "https://raw.githubusercontent.com/mobilelegendsbkrjd-oss/lat_cs_bkrjd/main/seriesSL.json"
 
-    // Clase para parsear el JSON más rápido
     data class GitHubItem(
         @JsonProperty("title") val title: String? = null,
         @JsonProperty("url") val url: String? = null,
@@ -31,7 +33,7 @@ class SoloLatino : MainAPI() {
     )
 
     @Suppress("DEPRECATION")
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? = coroutineScope {
         val sections = listOf(
             "🔥 Sagas" to sagasJsonUrl,
             "🎥 Películas" to "$mainUrl/peliculas",
@@ -48,55 +50,55 @@ class SoloLatino : MainAPI() {
             "📚 Categorias (solo TV)" to seriesCuradasJsonUrl
         )
 
-        // CAMBIO IMPORTANTE: Usamos 'apmap' en lugar de 'forEach' o 'map'
-        // Esto carga todas las secciones simultáneamente.
-        val items = sections.apmap { (name, url) ->
-            try {
-                val tvType = when (name) {
-                    "🎥 Películas" -> TvType.Movie
-                    else -> TvType.TvSeries
-                }
-
-                val home = if (name == "🔥 Sagas" || name == "📚 Categorias (solo TV)") {
-                    try {
-                        // Optimización: Usamos el parser de JSON nativo en lugar de Regex manual
-                        val jsonText = app.get(url, timeout = 20).text
-                        val parsed = AppUtils.tryParseJson<List<GitHubItem>>(jsonText)
-                        
-                        parsed?.mapNotNull { item ->
-                            val title = item.title ?: return@mapNotNull null
-                            val link = item.url ?: return@mapNotNull null
-                            newTvSeriesSearchResponse(title, link, tvType) {
-                                this.posterUrl = item.poster
-                            }
-                        } ?: emptyList()
-                    } catch (e: Exception) {
-                        emptyList()
+        // SOLUCIÓN: Usamos async/awaitAll en lugar de apmap para carga paralela compatible
+        val items = sections.map { (name, url) ->
+            async {
+                try {
+                    val tvType = when (name) {
+                        "🎥 Películas" -> TvType.Movie
+                        else -> TvType.TvSeries
                     }
-                } else {
-                    val finalUrl = if (page > 1) "$url/page/$page/" else url
-                    val doc = app.get(finalUrl).document
-                    doc.select("div.items article.item").map {
-                        val title = it.selectFirst("a div.data h3")?.text() ?: return@map null
-                        val link = it.selectFirst("a")?.attr("href") ?: return@map null
-                        val img = it.selectFirst("div.poster img.lazyload")?.attr("data-srcset")
-                        newTvSeriesSearchResponse(title, link, tvType, true) {
-                            this.posterUrl = img
-                        }
-                    }.filterNotNull()
-                }
 
-                if (home.isNotEmpty()) {
-                    HomePageList(name, home)
-                } else {
+                    val home = if (name == "🔥 Sagas" || name == "📚 Categorias (solo TV)") {
+                        try {
+                            val jsonText = app.get(url, timeout = 20).text
+                            val parsed = AppUtils.tryParseJson<List<GitHubItem>>(jsonText)
+                            
+                            parsed?.mapNotNull { item ->
+                                val title = item.title ?: return@mapNotNull null
+                                val link = item.url ?: return@mapNotNull null
+                                newTvSeriesSearchResponse(title, link, tvType) {
+                                    this.posterUrl = item.poster
+                                }
+                            } ?: emptyList()
+                        } catch (e: Exception) {
+                            emptyList()
+                        }
+                    } else {
+                        val finalUrl = if (page > 1) "$url/page/$page/" else url
+                        val doc = app.get(finalUrl).document
+                        doc.select("div.items article.item").mapNotNull {
+                            val title = it.selectFirst("a div.data h3")?.text() ?: return@mapNotNull null
+                            val link = it.selectFirst("a")?.attr("href") ?: return@mapNotNull null
+                            val img = it.selectFirst("div.poster img.lazyload")?.attr("data-srcset")
+                            newTvSeriesSearchResponse(title, link, tvType, true) {
+                                this.posterUrl = img
+                            }
+                        }
+                    }
+
+                    if (home.isNotEmpty()) {
+                        HomePageList(name, home)
+                    } else {
+                        null
+                    }
+                } catch (e: Exception) {
                     null
                 }
-            } catch (e: Exception) {
-                null
             }
-        }.filterNotNull()
+        }.awaitAll().filterNotNull()
 
-        return newHomePageResponse(items)
+        return@coroutineScope newHomePageResponse(items)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -167,7 +169,6 @@ class SoloLatino : MainAPI() {
                 ?: doc.selectFirst("div.infoCard .uAvatar img")?.attr("data-src")
                 ?: "https://sololatino.net/wp-content/uploads/2022/11/logo-final.png"
 
-            // Optimización visual de rangos de años
             val uniqueYears = sortedItems.mapNotNull { if (it.year > 0) it.year else null }.distinct().sorted()
             val yearRangeText = if (uniqueYears.isNotEmpty()) {
                 if (uniqueYears.size == 1) "Año: ${uniqueYears.first()}" 
@@ -194,7 +195,6 @@ class SoloLatino : MainAPI() {
             }
         }
 
-        // Lógica normal para Películas y Series
         val tvType = if (url.contains("peliculas")) TvType.Movie else TvType.TvSeries
         val title = doc.selectFirst("div.data h1")?.text() ?: ""
         val poster = doc.selectFirst("div.poster img")?.attr("data-src") ?: ""
@@ -239,36 +239,50 @@ class SoloLatino : MainAPI() {
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ): Boolean {
+    ): Boolean = coroutineScope {
         try {
             val doc = app.get(data).document
-            // Buscar iframe principal
-            val iframeSrc = doc.selectFirst("iframe")?.attr("src") ?: return false
+            val iframeSrc = doc.selectFirst("iframe")?.attr("src") ?: return@coroutineScope false
             
             if (iframeSrc.startsWith("https://embed69.org/")) {
                 Embed69Extractor.load(iframeSrc, data, subtitleCallback, callback)
             } else if (iframeSrc.startsWith("https://xupalace.org/video")) {
-                // Optimización: Extraemos los IDs y cargamos en paralelo
                 val regex = """(go_to_player|go_to_playerVast)\('(.*?)'""".toRegex()
                 val html = app.get(iframeSrc).text
                 
+                // SOLUCIÓN: Carga paralela corregida
                 regex.findAll(html).map { it.groupValues.get(2) }
                     .toList()
-                    .apmap { // Usamos apmap aquí también para cargar extractores en paralelo
-                        loadExtractor(Embed69Extractor.fixHostsLinks(it), data, subtitleCallback, callback)
-                    }
+                    .map { link ->
+                        async {
+                            loadExtractor(fixHostsLinks(link), data, subtitleCallback, callback)
+                        }
+                    }.awaitAll()
             } else {
-                // Caso genérico
-                loadExtractor(Embed69Extractor.fixHostsLinks(iframeSrc), data, subtitleCallback, callback)
+                loadExtractor(fixHostsLinks(iframeSrc), data, subtitleCallback, callback)
             }
         } catch (e: Exception) {
             // Error silencioso
         }
-        return true
+        return@coroutineScope true
     }
-    
-    // Asumimos que fixUrl ya existe o es un helper, si no, habría que importarlo.
-    // Como no está definido en tu código original, uso el url directo, pero si es de Utils, ok.
+
+    // Agregamos esta función aquí para evitar errores de referencia si no la encuentra en el otro archivo
+    private fun fixHostsLinks(url: String): String {
+        return url
+            .replaceFirst("https://hglink.to", "https://streamwish.to")
+            .replaceFirst("https://swdyu.com", "https://streamwish.to")
+            .replaceFirst("https://cybervynx.com", "https://streamwish.to")
+            .replaceFirst("https://dumbalag.com", "https://streamwish.to")
+            .replaceFirst("https://mivalyo.com", "https://vidhidepro.com")
+            .replaceFirst("https://dinisglows.com", "https://vidhidepro.com")
+            .replaceFirst("https://dhtpre.com", "https://vidhidepro.com")
+            .replaceFirst("https://filemoon.link", "https://filemoon.sx")
+            .replaceFirst("https://sblona.com", "https://watchsb.com")
+            .replaceFirst("https://lulu.st", "https://lulustream.com")
+            .replaceFirst("https://uqload.io", "https://uqload.com")
+            .replaceFirst("https://do7go.com", "https://dood.la")
+    }
     
     private data class EpisodeData(
         val url: String,
