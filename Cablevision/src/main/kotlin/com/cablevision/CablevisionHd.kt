@@ -68,13 +68,6 @@ class CablevisionHd : MainAPI() {
 
     private val dos47Cat = setOf("24/7")
 
-    private val canalesExcluidos = setOf(
-        "MUNDO LATAM",
-        "Mundo Latam \uD83C\uDF10",
-        "Donar con PayPal",
-    )
-
-
     // ===============================
     // MAIN PAGE CON CATEGORÍAS REALES
     // ===============================
@@ -84,36 +77,23 @@ class CablevisionHd : MainAPI() {
     ): HomePageResponse {
 
         val doc = app.get(mainUrl, headers = headers).document
-
         val categorias = linkedMapOf<String, MutableList<SearchResponse>>()
-        val todos = mutableListOf<SearchResponse>()
 
         val channels = doc.select("a.channel-link")
 
         for (item in channels) {
 
             val title = item.selectFirst("img")?.attr("alt") ?: continue
-
-// 🔥 Filtrar canales basura
-            if (canalesExcluidos.any { title.equals(it, true) }) continue
             val link = item.attr("href")
             val img = item.selectFirst("img")?.attr("src")
-
-            val poster = img?.let {
-                if (it.startsWith("http")) it
-                else "$mainUrl/${it.removePrefix("/")}"
-            }
 
             val response = newLiveSearchResponse(
                 title,
                 fixUrl(link),
                 TvType.Live
             ) {
-                posterUrl = poster
+                posterUrl = img?.let { fixUrl(it) }
             }
-
-            // 🔥 Agregar a TODOS siempre
-            todos.add(response)
 
             val categoria = when {
                 deportesCat.any { title.equals(it, true) } -> "Deportes"
@@ -129,18 +109,10 @@ class CablevisionHd : MainAPI() {
             categorias.getOrPut(categoria) { mutableListOf() }.add(response)
         }
 
-        // 🔥 Poner TODOS arriba
-        val finalList = mutableListOf<HomePageList>()
-
-        finalList.add(HomePageList("TODOS", todos))
-
-        categorias.forEach { (name, list) ->
-            finalList.add(HomePageList(name, list))
-        }
-
-        return HomePageResponse(finalList)
+        return HomePageResponse(
+            categorias.map { HomePageList(it.key, it.value) }
+        )
     }
-
 
     // ===============================
     // SEARCH
@@ -156,8 +128,6 @@ class CablevisionHd : MainAPI() {
 
             val title = item.selectFirst("img")?.attr("alt") ?: continue
             if (!title.contains(query, true)) continue
-
-            if (canalesExcluidos.any { title.equals(it, true) }) continue
 
             val link = item.attr("href")
             val img = item.selectFirst("img")?.attr("src")
