@@ -95,76 +95,76 @@ class Novelas360 : MainAPI() {
     }
 
     override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
+    data: String,
+    isCasting: Boolean,
+    subtitleCallback: (SubtitleFile) -> Unit,
+    callback: (ExtractorLink) -> Unit
+): Boolean {
 
-        val id = data.substringAfterLast("/")
+    val id = data.substringAfterLast("/")
 
-        val embedRes = app.get(
-            "$mainUrl/player/embed_player.php?vid=$id&pop=0",
-            headers = mapOf(
-                "Referer" to "$mainUrl/e/$id",
-                "Origin" to mainUrl,
-                "User-Agent" to chromeUA
-            )
+    val embedRes = app.get(
+        "$mainUrl/player/embed_player.php?vid=$id&pop=0",
+        headers = mapOf(
+            "Referer" to "$mainUrl/e/$id",
+            "Origin" to mainUrl,
+            "User-Agent" to chromeUA
         )
+    )
 
-        val embed = embedRes.text
+    val embed = embedRes.text
 
-        val sh = Regex("""["']sh["']\s*[:=]\s*["']([a-f0-9]+)["']""")
-            .find(embed)
-            ?.groupValues?.get(1)
-            ?: return false
+    val sh = Regex("""["']sh["']\s*[:=]\s*["']([a-f0-9]+)["']""")
+        .find(embed)
+        ?.groupValues?.get(1)
+        ?: return false
 
-        val postData = mapOf(
-            "htoken" to "",
-            "sh" to sh,
-            "ver" to "4",
-            "secure" to "0",
-            "adb" to "96958",
-            "v" to id,
-            "token" to "",
-            "gt" to "",
-            "embed_from" to "0",
-            "wasmcheck" to "0",
-            "adscore" to "",
-            "click_hash" to "",
-            "clickx" to "0",
-            "clicky" to "0"
+    val postData = mapOf(
+        "htoken" to "",
+        "sh" to sh,
+        "ver" to "4",
+        "secure" to "0",
+        "adb" to "96958",
+        "v" to id,
+        "token" to "",
+        "gt" to "",
+        "embed_from" to "0",
+        "wasmcheck" to "0",
+        "adscore" to "",
+        "click_hash" to "",
+        "clickx" to "0",
+        "clicky" to "0"
+    )
+
+    val md5Res = app.post(
+        "$mainUrl/player/get_md5.php",
+        data = postData,
+        headers = mapOf(
+            "Referer" to "$mainUrl/e/$id",
+            "Origin" to mainUrl,
+            "User-Agent" to chromeUA,
+            "X-Requested-With" to "XMLHttpRequest"
         )
+    )
 
-        val md5Res = app.post(
-            "$mainUrl/player/get_md5.php",
-            data = postData,
-            headers = mapOf(
-                "Referer" to "$mainUrl/e/$id",
-                "Origin" to mainUrl,
-                "User-Agent" to chromeUA,
-                "X-Requested-With" to "XMLHttpRequest"
-            )
-        )
+    val body = md5Res.text
 
-        val body = md5Res.text
+    val m3u8 = Regex("""https?:\/\/[^"]+\.m3u8[^"]*""")
+        .find(body)
+        ?.value
+        ?: return false
 
-        val m3u8 = Regex("""https?:\/\/[^"]+\.m3u8[^"]*""")
-            .find(body)
-            ?.value
-            ?: return false
+    newExtractorLink(
+        "Novelas360",
+        "Novelas360",
+        m3u8,
+        ExtractorLinkType.M3U8
+    ) { link ->
+        link.referer = "$mainUrl/e/$id"
+        callback(link)
+    }
 
-        // ✅ versión compatible con TU API
-        callback.invoke(
-            newExtractorLink(
-                "Novelas360",
-                "Novelas360",
-                m3u8,
-                "$mainUrl/e/$id"
-            )
-        )
-
-        return true
+    return true
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
