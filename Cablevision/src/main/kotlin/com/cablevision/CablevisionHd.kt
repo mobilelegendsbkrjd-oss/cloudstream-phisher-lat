@@ -168,65 +168,166 @@ class CablevisionHd : MainAPI() {
     // LOAD LINKS (EXTRACTOR FUNCIONAL)
     // ===============================
     override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
+    data: String,
+    isCasting: Boolean,
+    subtitleCallback: (SubtitleFile) -> Unit,
+    callback: (ExtractorLink) -> Unit
+): Boolean {
 
-        var currentUrl = data
-        var currentReferer = mainUrl
-        val maxDepth = 5
+    var currentUrl = data
+    var currentReferer = mainUrl
+    val maxDepth = 5
 
-        repeat(maxDepth) {
+    repeat(maxDepth) { depth ->
 
-            val response = app.get(
-                currentUrl,
-                headers = mapOf(
-                    "User-Agent" to headers["User-Agent"]!!,
-                    "Referer" to currentReferer
-                )
+        val response = app.get(
+            currentUrl,
+            headers = mapOf(
+                "User-Agent" to headers["User-Agent"]!!,
+                "Referer" to currentReferer
             )
+        )
 
-            val html = response.text
-            val document = response.document
+        val html = response.text
+        val document = response.document
 
-            Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""")
+        // ===============================
+        // A) M3U8 DIRECTO
+        // ===============================
+        Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""")
+            .find(html)
+            ?.groupValues?.get(1)
+            ?.replace("\\/", "/")
+            ?.let { url ->
+
+                callback(
+                    newExtractorLink(
+                        name,
+                        "Direct",
+                        url,
+                        ExtractorLinkType.M3U8
+                    )
+                )
+                return true
+            }
+
+        // ===============================
+        // B) SCRIPT PACKER (REAL)
+        // ===============================
+        val packedRegex =
+            Regex("""eval\(function\(p,a,c,k,e,d\).*?\)""", RegexOption.DOT_MATCHES_ALL)
+
+        packedRegex.findAll(html).forEach { match ->
+
+            try {
+                val unpacked = JsUnpacker(match.value).unpack() ?: ""
+
+                Regex("""https?://[^"']+\.m3u8[^"']*""")
+                    .find(unpacked)
+                    ?.groupValues?.get(0)
+                    ?.replace("\\/", "/")
+                    ?.let { url ->
+
+                        callback(
+                            newExtractorLink(
+                                name,
+                                "Unpacked",
+                                url,
+                                ExtractorLinkType.M3U8
+                            )
+                        )
+                        return true
+                    }
+
+            } catch (_: Exception) {}
+        }
+
+        // ===============================
+        // C) TRIPLE BASE64
+        // ===============================
+        if (html.contains("atob")) {
+
+            Regex("""atob\("([^"]+)""")
                 .find(html)
                 ?.groupValues?.get(1)
-                ?.replace("\\/", "/")
-                ?.let { url ->
+                ?.let { encoded ->
+
+                    try {
+                        var decoded = encoded
+                        repeat(3) {
+                            decoded = String(Base64.decode(decoded, Base64.DEFAULT))
+                        }
+
+                        Regex("""https?://[^"]+\.m3u8[^"]*""")
+                            .find(decoded)
+                            ?.value
+                            ?.let { url ->
+
+                                callback(
+                                    newExtractorLink(
+                                        name,
+                                        "Decoded",
+                                        url,
+                                        ExtractorLinkType.M3U8
+                                    )
+                                )
+                                return true
+                            }
+
+                    } catch (_: Exception) {}
+                }
+        }
+
+        // ===============================
+        // D) source:, file:, var src
+        // ===============================
+        val genericRegexes = listOf(
+            Regex("""source\s*:\s*["']([^"']+)["']"""),
+            Regex("""file\s*:\s*["']([^"']+)["']"""),
+            Regex("""var\s+src\s*=\s*["']([^"']+)["']""")
+        )
+
+        for (regex in genericRegexes) {
+            regex.find(html)?.let {
+                val url = it.groupValues[1].replace("\\/", "/")
+
+                if (url.startsWith("http")) {
                     callback(
                         newExtractorLink(
                             name,
-                            "Live",
+                            "Generic",
                             url,
-                            ExtractorLinkType.M3U8
-                        ) { quality = Qualities.Unknown.value }
+                            if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        )
                     )
                     return true
                 }
-
-            val iframeSrc = document.select("iframe").attr("src")
-
-            if (iframeSrc.isNotEmpty()) {
-
-                val nextUrl =
-                    if (iframeSrc.startsWith("http"))
-                        iframeSrc
-                    else
-                        fixUrl(iframeSrc)
-
-                if (nextUrl == currentUrl) return false
-
-                currentReferer = currentUrl
-                currentUrl = nextUrl
-                return@repeat
             }
+        }
 
-            return false
+        // ===============================
+        // E) IFRAME PROFUNDIDAD
+        // ===============================
+        val iframeSrc = document.select("iframe").attr("src")
+
+        if (iframeSrc.isNotEmpty()) {
+
+            val nextUrl =
+                if (iframeSrc.startsWith("http"))
+                    iframeSrc
+                else
+                    fixUrl(iframeSrc)
+
+            if (nextUrl == currentUrl) return false
+
+            currentReferer = currentUrl
+            currentUrl = nextUrl
+            return@repeat
         }
 
         return false
+    }
+
+    return false
     }
 }
