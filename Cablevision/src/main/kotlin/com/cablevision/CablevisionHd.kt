@@ -151,17 +151,17 @@ class CablevisionHd : MainAPI() {
     // ===============================
     override suspend fun load(url: String): LoadResponse {
 
-        val doc = app.get(url, headers = headers).document
+    val doc = app.get(url, headers = headers).document
 
-        val title = doc.selectFirst("h1")?.text()
-            ?: doc.selectFirst("img")?.attr("alt")
-            ?: "Live"
+    val title = doc.selectFirst("h1")?.text()
+        ?: doc.selectFirst("img")?.attr("alt")
+        ?: "Live"
 
-        return newLiveStreamLoadResponse(
-            title,
-            url,
-            url
-        )
+    return newLiveStreamLoadResponse(
+        title,
+        url,
+        url
+    )
     }
 
     // ===============================
