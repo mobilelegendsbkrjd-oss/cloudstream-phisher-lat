@@ -16,10 +16,6 @@ class Novelas360 : MainAPI() {
     private val chromeUA =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-    // ===============================
-    // UTILS
-    // ===============================
-
     private suspend fun getDoc(url: String): Document {
         return app.get(
             url,
@@ -35,10 +31,6 @@ class Novelas360 : MainAPI() {
         return if (url.startsWith("//")) "https:$url" else url
     }
 
-    // ===============================
-    // MAIN PAGE
-    // ===============================
-
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = getDoc("$mainUrl/telenovelas/mexico/")
         val items = document.select("div.item a").mapNotNull { it.toSearchResult() }
@@ -48,10 +40,6 @@ class Novelas360 : MainAPI() {
             false
         )
     }
-
-    // ===============================
-    // SEARCH
-    // ===============================
 
     override suspend fun search(query: String): List<SearchResponse> {
         val document = getDoc("$mainUrl/?s=$query")
@@ -67,10 +55,6 @@ class Novelas360 : MainAPI() {
             }
         }
     }
-
-    // ===============================
-    // LOAD SERIES
-    // ===============================
 
     override suspend fun load(url: String): LoadResponse {
         val doc = getDoc(url)
@@ -96,10 +80,6 @@ class Novelas360 : MainAPI() {
         }
     }
 
-    // ===============================
-    // LOAD LINKS
-    // ===============================
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -109,7 +89,6 @@ class Novelas360 : MainAPI() {
 
         val id = data.substringAfterLast("/")
 
-        // 1️⃣ Obtener embed
         val embedResponse = app.get(
             "$mainUrl/player/embed_player.php?vid=$id&pop=0",
             headers = mapOf(
@@ -126,7 +105,6 @@ class Novelas360 : MainAPI() {
 
         val cookies = embedResponse.cookies
 
-        // 2️⃣ Post a get_md5
         val postBody = """
         {
           "htoken":"",
@@ -164,12 +142,13 @@ class Novelas360 : MainAPI() {
             ?.value
             ?: return false
 
-        // 3️⃣ Enviar enlace (firma correcta)
         callback.invoke(
             newExtractorLink(
-                name = "Novelas360",
-                url = m3u8,
-                headers = mapOf(
+                name,          // source
+                name,          // display name
+                m3u8,          // url
+                mainUrl,       // referer
+                mapOf(         // headers
                     "User-Agent" to chromeUA,
                     "Referer" to mainUrl
                 )
@@ -178,10 +157,6 @@ class Novelas360 : MainAPI() {
 
         return true
     }
-
-    // ===============================
-    // SEARCH MAPPER
-    // ===============================
 
     private fun Element.toSearchResult(): SearchResponse? {
         val href = attr("href")
