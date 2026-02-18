@@ -17,7 +17,7 @@ class Novelas360 : MainAPI() {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
     // ===============================
-    // Utils
+    // UTILS
     // ===============================
 
     private suspend fun getDoc(url: String): Document {
@@ -36,7 +36,7 @@ class Novelas360 : MainAPI() {
     }
 
     // ===============================
-    // Main Page
+    // MAIN PAGE
     // ===============================
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -50,7 +50,7 @@ class Novelas360 : MainAPI() {
     }
 
     // ===============================
-    // Search
+    // SEARCH
     // ===============================
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -69,7 +69,7 @@ class Novelas360 : MainAPI() {
     }
 
     // ===============================
-    // Load Series
+    // LOAD SERIES
     // ===============================
 
     override suspend fun load(url: String): LoadResponse {
@@ -114,7 +114,7 @@ class Novelas360 : MainAPI() {
     }
 
     // ===============================
-    // Load Links (PLAYER FLOW REAL)
+    // LOAD LINKS (PLAYER REAL)
     // ===============================
 
     override suspend fun loadLinks(
@@ -126,7 +126,7 @@ class Novelas360 : MainAPI() {
 
         val id = data.substringAfterLast("/")
 
-        // STEP 1 - GET embed_player
+        // 1️⃣ Obtener embed
         val embedResponse = app.get(
             "$mainUrl/player/embed_player.php?vid=$id&pop=0",
             headers = mapOf(
@@ -138,16 +138,14 @@ class Novelas360 : MainAPI() {
 
         val embedHtml = embedResponse.text
 
-        // Extraer SH dinámico
         val sh = Regex("""["']sh["']\s*[:=]\s*["']([a-f0-9]+)["']""")
             .find(embedHtml)
             ?.groupValues?.get(1)
             ?: return false
 
-        // Cookies necesarias (uid)
         val cookies = embedResponse.cookies
 
-        // STEP 2 - POST get_md5
+        // 2️⃣ Post a get_md5
         val postBody = """
         {
           "htoken":"",
@@ -180,33 +178,33 @@ class Novelas360 : MainAPI() {
             cookies = cookies
         )
 
-        val responseText = md5Response.text
-
-        // STEP 3 - Extraer m3u8
         val m3u8 = Regex("""https?:\/\/[^"]+\.m3u8[^"]*""")
-            .find(responseText)
+            .find(md5Response.text)
             ?.value
             ?: return false
 
-        // STEP 4 - Enviar a reproductor
+        // 3️⃣ Enviar a reproductor (API VIEJA)
         callback.invoke(
             newExtractorLink(
                 source = name,
                 name = name,
-                url = m3u8,
-                headers = mapOf(
+                url = m3u8
+            ) {
+                this.referer = mainUrl
+                this.quality = Qualities.Unknown.value
+                this.isM3u8 = true
+                this.headers = mapOf(
                     "User-Agent" to chromeUA,
                     "Referer" to mainUrl
-                ),
-                type = ExtractorLinkType.M3U8
-            )
+                )
+            }
         )
 
         return true
     }
 
     // ===============================
-    // Search Result Mapper
+    // SEARCH MAPPER
     // ===============================
 
     private fun Element.toSearchResult(): SearchResponse? {
