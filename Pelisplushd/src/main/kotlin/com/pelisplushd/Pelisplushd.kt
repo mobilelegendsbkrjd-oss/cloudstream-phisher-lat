@@ -2,10 +2,7 @@ package com.pelisplushd
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.getQualityFromName
+import com.lagradost.cloudstream3.utils.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
@@ -57,12 +54,12 @@ class Pelisplushd : MainAPI() {
         
         return newMovieSearchResponse(title, Data(id, mediaType ?: "movie").toJson(), type) {
             this.posterUrl = poster
-            this.score = voteAverage?.let { Score.from10(it) }
+            this.score = voteAverage?.let { Score.from10(it, 10) }
         }
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val data = parseJson<Data>(url)
+        val data = AppUtils.parseJson<Data>(url)
         val type = if (data.type == "tv") TvType.TvSeries else TvType.Movie
 
         val apiUrl = if (type == TvType.Movie) {
@@ -79,18 +76,6 @@ class Pelisplushd : MainAPI() {
         val year = details.releaseDate?.split("-")?.firstOrNull()?.toIntOrNull()
             ?: details.firstAirDate?.split("-")?.firstOrNull()?.toIntOrNull()
         
-        val actors = details.credits?.cast?.mapNotNull { cast ->
-            cast.name?.let { name ->
-                ActorData(
-                    Actor(
-                        name,
-                        cast.profilePath?.let { "https://image.tmdb.org/t/p/w185$it" }
-                    ),
-                    cast.character
-                )
-            }
-        } ?: emptyList()
-
         val trailer = details.videos?.results?.firstOrNull { it.type == "Trailer" }?.let {
             "https://www.youtube.com/watch?v=${it.key}"
         }
@@ -105,11 +90,13 @@ class Pelisplushd : MainAPI() {
                 seasonDetails.episodes?.forEach { ep ->
                     episodes.add(
                         newEpisode(
-                            LoadData(
-                                imdbId = details.externalIds?.imdbId,
-                                season = ep.seasonNumber,
-                                episode = ep.episodeNumber
-                            ).toJson()
+                            AppUtils.toJson(
+                                LoadData(
+                                    imdbId = details.externalIds?.imdbId,
+                                    season = ep.seasonNumber,
+                                    episode = ep.episodeNumber
+                                )
+                            )
                         ) {
                             this.name = ep.name ?: "Episodio ${ep.episodeNumber}"
                             this.season = ep.seasonNumber
@@ -128,22 +115,25 @@ class Pelisplushd : MainAPI() {
                 this.year = year
                 this.plot = details.overview
                 this.tags = details.genres?.map { it.name }
-                this.score = details.voteAverage?.let { Score.from10(it) }
-                this.actors = actors
+                this.rating = details.voteAverage
                 trailer?.let { this.addTrailer(it) }
                 details.externalIds?.imdbId?.let { this.addImdbId(it) }
                 this.addTMDbId(data.id.toString())
             }
         } else {
-            return newMovieLoadResponse(title, url, TvType.Movie, LoadData(imdbId = details.externalIds?.imdbId).toJson()) {
+            return newMovieLoadResponse(
+                title, 
+                url, 
+                TvType.Movie, 
+                AppUtils.toJson(LoadData(imdbId = details.externalIds?.imdbId))
+            ) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = background
                 this.year = year
                 this.plot = details.overview
                 this.duration = details.runtime
                 this.tags = details.genres?.map { it.name }
-                this.score = details.voteAverage?.let { Score.from10(it) }
-                this.actors = actors
+                this.rating = details.voteAverage
                 trailer?.let { this.addTrailer(it) }
                 details.externalIds?.imdbId?.let { this.addImdbId(it) }
                 this.addTMDbId(data.id.toString())
@@ -157,7 +147,7 @@ class Pelisplushd : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val dataObj = parseJson<LoadData>(data)
+        val dataObj = AppUtils.parseJson<LoadData>(data)
         val season = dataObj.season
         val episode = dataObj.episode
         val id = dataObj.imdbId ?: return false
@@ -212,9 +202,9 @@ class Pelisplushd : MainAPI() {
                                             this.name,
                                             "${language.uppercase()} ${i + 1}",
                                             videoUrl,
-                                            ExtractorLinkType.M3U8
+                                            getQualityFromName("HD")
                                         ) {
-                                            this.quality = getQualityFromName("HD")
+                                            this.isM3u8 = true
                                             this.headers = mapOf("User-Agent" to USER_AGENT, "Referer" to mainUrl)
                                         }
                                     )
