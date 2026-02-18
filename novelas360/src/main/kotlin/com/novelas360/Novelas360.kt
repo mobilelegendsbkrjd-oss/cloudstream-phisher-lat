@@ -103,7 +103,6 @@ class Novelas360 : MainAPI() {
 
         val id = data.substringAfterLast("/")
 
-        // STEP 1 - embed_player
         val embedRes = app.get(
             "$mainUrl/player/embed_player.php?vid=$id&pop=0",
             headers = mapOf(
@@ -120,7 +119,6 @@ class Novelas360 : MainAPI() {
             ?.groupValues?.get(1)
             ?: return false
 
-        // STEP 2 - POST get_md5
         val postData = mapOf(
             "htoken" to "",
             "sh" to sh,
@@ -156,18 +154,13 @@ class Novelas360 : MainAPI() {
             ?.value
             ?: return false
 
-        // 🔥 LINK FINAL CORRECTO
+        // ✅ versión compatible con TU API
         callback.invoke(
             newExtractorLink(
-                source = "Novelas360",
-                name = "Novelas360",
-                url = m3u8,
-                type = ExtractorLinkType.M3U8,
-                headers = mapOf(
-                    "User-Agent" to chromeUA,
-                    "Referer" to "$mainUrl/e/$id"
-                ),
-                quality = Qualities.Unknown.value
+                "Novelas360",
+                "Novelas360",
+                m3u8,
+                "$mainUrl/e/$id"
             )
         )
 
