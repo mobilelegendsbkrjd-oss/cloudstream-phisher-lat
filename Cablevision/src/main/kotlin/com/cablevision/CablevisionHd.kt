@@ -73,7 +73,8 @@ class CablevisionHdProvider : MainAPI() {
             Pair("Todos", mainUrl),
         )
         
-        urls.apmap { (name, url) ->
+        // Reemplazar apmap con un bucle for tradicional
+        for ((name, url) in urls) {
             val doc = app.get(url).document
             
             // Selector corregido basado en el HTML real
@@ -108,7 +109,8 @@ class CablevisionHdProvider : MainAPI() {
             }
         }
         
-        return HomePageResponse(items)
+        // Usar newHomePageResponse en lugar del constructor
+        return newHomePageResponse(items)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -186,7 +188,9 @@ class CablevisionHdProvider : MainAPI() {
                             "Directo",
                             url,
                             ExtractorLinkType.M3U8
-                        )
+                        ) {
+                            this.quality = getQualityFromName("HD")
+                        }
                     )
                     return true
                 }
@@ -214,7 +218,9 @@ class CablevisionHdProvider : MainAPI() {
                                     "Desempaquetado",
                                     url,
                                     ExtractorLinkType.M3U8
-                                )
+                                ) {
+                                    this.quality = getQualityFromName("HD")
+                                }
                             )
                             return true
                         }
@@ -249,7 +255,9 @@ class CablevisionHdProvider : MainAPI() {
                                             "Base64",
                                             url,
                                             ExtractorLinkType.M3U8
-                                        )
+                                        ) {
+                                            this.quality = getQualityFromName("HD")
+                                        }
                                     )
                                     return true
                                 }
@@ -278,7 +286,9 @@ class CablevisionHdProvider : MainAPI() {
                                 "Genérico",
                                 url,
                                 if (url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            )
+                            ) {
+                                this.quality = getQualityFromName("HD")
+                            }
                         )
                         return true
                     }
