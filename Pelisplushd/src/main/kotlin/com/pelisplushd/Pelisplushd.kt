@@ -109,37 +109,65 @@ class Pelisplushd : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "$mainUrl/peliculas/page/" to "Películas",
-        "$mainUrl/series/page/" to "Series",
-        "$mainUrl/animes/page/" to "Animes",
-        "$mainUrl/peliculas/estrenos/page/" to "Estrenos Películas",
-        "$mainUrl/series/estrenos/page/" to "Estrenos Series",
-        "$mainUrl/peliculas/populares/page/" to "Películas Populares",
-        "$mainUrl/series/populares/page/" to "Series Populares",
-        "$mainUrl/generos/dorama/page/" to "Doramas"
+        "$mainUrl" to "Inicio",  // Primero cargamos la página principal
+        "$mainUrl/peliculas" to "Películas",
+        "$mainUrl/series" to "Series",
+        "$mainUrl/animes" to "Animes",
+        "$mainUrl/generos/dorama" to "Doramas"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (request.data.endsWith("/")) "${request.data}$page" else "${request.data}/$page"
+        // Construir la URL para la página solicitada
+        val url = buildString {
+            append(request.data.trimEnd('/'))
+            // La paginación en las categorías usa '?page=N'
+            if (request.data != mainUrl) {
+                append("?page=$page")
+            }
+        }
 
         val doc = try {
             app.get(url, headers = requestHeaders).document
         } catch (e: Exception) {
+            // Fallback a la URL sin paginación si falla
             app.get(request.data, headers = requestHeaders).document
         }
 
-        val items = doc.select("div.Posters a.Posters-link, .MovieList .TPostMv a, main .Posters a")
-            .mapNotNull { element ->
-                element.toSearchResult()
-            }
-            .distinctBy { it.url.trimEnd('/').substringAfterLast("/") }
+        val items = mutableListOf<SearchResponse>()
 
-        return newHomePageResponse(request.name, items, hasNext = items.isNotEmpty())
+        // --- ESTRATEGIA 1: Es la página de inicio (con pestañas) ---
+        if (request.data == mainUrl) {
+            items.addAll(
+                doc.select("div#default-tab-1 div.Posters a.Posters-link, " +
+                        "div#default-tab-2 div.Posters a.Posters-link, " +
+                        "div#default-tab-3 div.Posters a.Posters-link, " +
+                        "div#default-tab-4 div.Posters a.Posters-link")
+                    .mapNotNull { it.toSearchResult() }
+            )
+        }
+        // --- ESTRATEGIA 2: Es una página de categoría (como /peliculas, /series, etc.) ---
+        else {
+            items.addAll(
+                doc.select("div.Posters a.Posters-link")
+                    .mapNotNull { it.toSearchResult() }
+            )
+        }
+
+        // Determinar si hay más páginas (opcional, mejora la experiencia)
+        val hasNext = doc.select("ul.pagination a.page-link[rel='next']").isNotEmpty()
+
+        return newHomePageResponse(request.name, items.distinctBy { it.url.trimEnd('/').substringAfterLast("/") }, hasNext)
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
         val title = when {
-            hasAttr("data-title") -> attr("data-title")?.substringBefore(" Online Gratis HD")?.trim()
+            hasAttr("data-title") -> {
+                attr("data-title")
+                    ?.substringBefore(" Online Gratis HD")
+                    ?.trim()
+                    ?.removePrefix("VER ")
+                    ?.trim()
+            }
             else -> selectFirst(".listing-content p")?.text()
                 ?: selectFirst("p")?.text()
         } ?: return null
@@ -203,7 +231,7 @@ class Pelisplushd : MainAPI() {
         val poster = doc.selectFirst("img[src*='/poster/'], .card-body img.img-fluid")?.let { extractPoster(it) }
             ?: doc.selectFirst("meta[property='og:image']")?.attr("content")?.let { fixUrl(it) }
 
-        // Descripción - FORZAMOS String no nulo
+        // Descripción
         val description: String = doc.selectFirst("meta[property='og:description']")?.attr("content")
             ?: doc.selectFirst(".text-large")?.text()
             ?: ""
@@ -230,36 +258,8 @@ class Pelisplushd : MainAPI() {
             // Procesar temporadas y episodios
             val seasonTabs = doc.select(".VideoPlayer ul.TbVideoNv li a[href*='pills-vertical']")
 
-            seasonTabs.forEachIndexed { index, tab ->
-                val seasonNumber = index + 1
-                val tabId = tab.attr("href").replace("#", "").replace(" ", "")
-
-                // Buscar el panel de esta temporada
-                val seasonPanel = doc.selectFirst("div.tab-content div#$tabId, div.tab-content div[id*='$tabId']")
-
-                if (seasonPanel != null) {
-                    // Buscar todos los botones de episodios dentro del panel
-                    val episodeButtons = seasonPanel.select("a.btn-block[href*='/capitulo/']")
-
-                    episodeButtons.forEach { button ->
-                        val episodeUrl = button.attr("href")
-                        val episodeText = button.text()
-
-                        // Extraer número de episodio de la URL
-                        val episodeMatch = Regex("""capitulo/(\d+)""").find(episodeUrl)
-                        val episodeNumber = episodeMatch?.groupValues?.get(1)?.toIntOrNull() ?: 1
-
-                        episodesList.add(newEpisode(fixUrl(episodeUrl)) {
-                            this.name = episodeText
-                            this.season = seasonNumber
-                            this.episode = episodeNumber
-                        })
-                    }
-                }
-            }
-
-            // Si no encuentra con tabs, buscar directamente todos los enlaces de episodios
-            if (episodesList.isEmpty()) {
+            if (seasonTabs.isEmpty()) {
+                // Si no hay tabs, buscar episodios directamente en la página
                 doc.select("a.btn-block[href*='/capitulo/']").forEach { button ->
                     val episodeUrl = button.attr("href")
                     val episodeText = button.text()
@@ -276,13 +276,43 @@ class Pelisplushd : MainAPI() {
                         this.episode = episodeNumber
                     })
                 }
+            } else {
+                // Procesar por tabs (temporadas)
+                seasonTabs.forEachIndexed { index, tab ->
+                    val seasonNumber = index + 1
+                    val tabId = tab.attr("href").replace("#", "").replace(" ", "")
+
+                    val seasonPanel = doc.selectFirst("div.tab-content div#$tabId, div.tab-content div[id*='$tabId']")
+
+                    if (seasonPanel != null) {
+                        val episodeButtons = seasonPanel.select("a.btn-block[href*='/capitulo/']")
+
+                        episodeButtons.forEach { button ->
+                            val episodeUrl = button.attr("href")
+                            val episodeText = button.text()
+
+                            val episodeMatch = Regex("""capitulo/(\d+)""").find(episodeUrl)
+                            val episodeNumber = episodeMatch?.groupValues?.get(1)?.toIntOrNull() ?: 1
+
+                            episodesList.add(newEpisode(fixUrl(episodeUrl)) {
+                                this.name = episodeText
+                                this.season = seasonNumber
+                                this.episode = episodeNumber
+                            })
+                        }
+                    }
+                }
             }
         }
 
         // Recomendaciones
         doc.select("aside .Posters a.Posters-link, .related .Posters a, .MovieList a.Posters-link")
             .forEach { el ->
-                val recTitle = el.attr("data-title")?.substringBefore(" Online Gratis HD")?.trim()
+                val recTitle = el.attr("data-title")
+                    ?.substringBefore(" Online Gratis HD")
+                    ?.trim()
+                    ?.removePrefix("VER ")
+                    ?.trim()
                     ?: el.selectFirst(".listing-content p")?.text()
                     ?: return@forEach
 
@@ -341,6 +371,8 @@ class Pelisplushd : MainAPI() {
 
         var src = imgElement.attr("src")
         if (src.isBlank()) src = imgElement.attr("data-src")
+        if (src.isBlank()) src = imgElement.attr("data-srcset")
+        if (src.isBlank()) src = imgElement.attr("srcset")
 
         return if (src.isNotBlank()) {
             if (src.startsWith("http")) src else fixUrl(src)
@@ -356,25 +388,52 @@ class Pelisplushd : MainAPI() {
         var found = false
         val doc = app.get(data, headers = requestHeaders).document
 
-        // Buscar los enlaces en los elementos li.playurl con data-url
-        val videoItems = doc.select("li.playurl[data-url]")
+        // Función para normalizar URLs de extractores
+        fun normalizeUrl(url: String): String {
+            return url.replace("\\/", "/")
+                .replace("mivalyo.com", "vidhidepro.com")
+                .replace("dinisglows.com", "vidhidepro.com")
+                .replace("dhtpre.com", "vidhidepro.com")
+                .replace("swdyu.com", "streamwish.to")
+                .replace("hglink.to", "streamwish.to")
+                .replace("callistanise.com", "streamwish.to")
+                .replace("filemoon.sx", "filemoon.to")
+                .replace("embtaku.pro", "embtaku.com")
+        }
 
-        videoItems.forEach { item ->
-            val embedUrl = item.attr("data-url")
-            val quality = item.attr("data-name") ?: "Latino"
-
+        // --- NUEVO: Buscar en el div#link_url (usado en páginas de episodios) ---
+        val linkSpans = doc.select("div#link_url span[url]")
+        linkSpans.forEach { span ->
+            var embedUrl = span.attr("url")
             if (embedUrl.isNotBlank()) {
+                embedUrl = normalizeUrl(embedUrl)
                 if (loadExtractor(embedUrl, data, subtitleCallback, callback)) {
                     found = true
                 }
             }
         }
 
-        // Si no encuentra con el método anterior, buscar iframes directamente
+        // --- MÉTODO 2: Buscar en los elementos li.playurl[data-url] (usado en películas) ---
         if (!found) {
-            doc.select("iframe[src], video source[src]").forEach { element ->
-                val src = element.attr("src") ?: element.attr("data-src") ?: return@forEach
+            val videoItems = doc.select("li.playurl[data-url]")
+            videoItems.forEach { item ->
+                var embedUrl = item.attr("data-url")
+                val quality = item.attr("data-name") ?: "Latino"
+                if (embedUrl.isNotBlank()) {
+                    embedUrl = normalizeUrl(embedUrl)
+                    if (loadExtractor(embedUrl, data, subtitleCallback, callback)) {
+                        found = true
+                    }
+                }
+            }
+        }
+
+        // --- MÉTODO 3: Buscar iframes directamente (fallback) ---
+        if (!found) {
+            doc.select("iframe[src], video source[src], div.video-html iframe[src]").forEach { element ->
+                var src = element.attr("src") ?: element.attr("data-src") ?: return@forEach
                 if (src.isNotBlank() && src.contains("http")) {
+                    src = normalizeUrl(src)
                     if (loadExtractor(src, data, subtitleCallback, callback)) {
                         found = true
                     }
