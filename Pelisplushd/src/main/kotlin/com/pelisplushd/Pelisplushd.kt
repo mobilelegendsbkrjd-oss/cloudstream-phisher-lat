@@ -1,43 +1,15 @@
 package com.pelisplushd
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.api.Log
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.APIHolder.capitalize
-import com.lagradost.cloudstream3.Actor
-import com.lagradost.cloudstream3.ActorData
-import com.lagradost.cloudstream3.ErrorLoadingException
-import com.lagradost.cloudstream3.HomePageResponse
-import com.lagradost.cloudstream3.LoadResponse
-import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId
-import com.lagradost.cloudstream3.LoadResponse.Companion.addTMDbId
-import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
-import com.lagradost.cloudstream3.MainPageRequest
-import com.lagradost.cloudstream3.Score
-import com.lagradost.cloudstream3.SearchResponse
-import com.lagradost.cloudstream3.SearchResponseList
-import com.lagradost.cloudstream3.ShowStatus
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.TvType
-import com.lagradost.cloudstream3.addDate
-import com.lagradost.cloudstream3.amap
-import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.mainPageOf
-import com.lagradost.cloudstream3.metaproviders.TmdbProvider
-import com.lagradost.cloudstream3.newEpisode
-import com.lagradost.cloudstream3.newHomePageResponse
-import com.lagradost.cloudstream3.newMovieLoadResponse
-import com.lagradost.cloudstream3.newMovieSearchResponse
-import com.lagradost.cloudstream3.newSubtitleFile
-import com.lagradost.cloudstream3.newTvSeriesLoadResponse
-import com.lagradost.cloudstream3.toNewSearchResponseList
-import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
-import com.lagradost.cloudstream3.utils.ExtractorLink
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
+import org.json.JSONObject
 
-class Pelisplushd() : TmdbProvider() {
+class Pelisplushd : TmdbProvider() {
     override var name = "Pelisplushd"
     override var mainUrl = "https://embed69.org" //https://pelisplushd.bz/
     override var supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.AsianDrama)
@@ -89,12 +61,12 @@ class Pelisplushd() : TmdbProvider() {
 
     private fun getImageUrl(link: String?): String? {
         if (link == null) return null
-        return if (link.startsWith("/")) "https://image.tmdb.org/t/p/original/$link" else link
+        return if (link.startsWith("/")) "https://image.tmdb.org/t/p/w500$link" else link
     }
 
     private fun getOriImageUrl(link: String?): String? {
         if (link == null) return null
-        return if (link.startsWith("/")) "https://image.tmdb.org/t/p/original/$link" else link
+        return if (link.startsWith("/")) "https://image.tmdb.org/t/p/original$link" else link
     }
 
     override suspend fun getMainPage(
@@ -114,14 +86,14 @@ class Pelisplushd() : TmdbProvider() {
         return newMovieSearchResponse(
             title ?: name ?: originalTitle ?: return null,
             Data(id = id, type = mediaType ?: type).toJson(),
-            TvType.Movie,
+            if (mediaType == "tv" || type == "tv") TvType.TvSeries else TvType.Movie,
         ) {
             this.posterUrl = getImageUrl(posterPath)
-            this.score= Score.from10(voteAverage)
+            this.score = Score.from10(voteAverage)
         }
     }
 
-    override suspend fun quickSearch(query: String): List<SearchResponse>? = search(query,1)?.items
+    override suspend fun quickSearch(query: String): List<SearchResponse>? = search(query, 1)?.items
 
     override suspend fun search(query: String, page: Int): SearchResponseList? {
         return app.get(
@@ -130,7 +102,6 @@ class Pelisplushd() : TmdbProvider() {
             media.toSearchResponse()
         }?.toNewSearchResponseList()
     }
-
 
     override suspend fun load(url: String): LoadResponse? {
         val data = parseJson<Data>(url)
@@ -161,7 +132,7 @@ class Pelisplushd() : TmdbProvider() {
                     getImageUrl(cast.profilePath)
                 ), roleString = cast.character
             )
-        } ?: return null
+        }
         val recommendations =
             res.recommendations?.results?.mapNotNull { media -> media.toSearchResponse() }
 
@@ -170,18 +141,19 @@ class Pelisplushd() : TmdbProvider() {
 
         return if (type == TvType.TvSeries) {
             val episodes = res.seasons?.mapNotNull { season ->
-                app.get("$tmdbAPI/${data.type}/${data.id}/season/${season.seasonNumber}?api_key=$apiKey&language=es-ES")
+                app.get("$tmdbAPI/tv/${data.id}/season/${season.seasonNumber}?api_key=$apiKey&language=es-ES")
                     .parsedSafe<MediaDetailEpisodes>()?.episodes?.map { eps ->
-                        newEpisode(LoadData(
-                            res.title,
-                            year,
-                            isAnime,
-                            res.external_ids?.imdb_id,
-                            eps.seasonNumber,
-                            eps.episodeNumber
-                        ).toJson())
-                        {
-                            this.name = eps.name + if (isUpcoming(eps.airDate)) " • [UPCOMING]" else ""
+                        newEpisode(
+                            LoadData(
+                                title = res.title,
+                                year = year,
+                                isAnime = isAnime,
+                                imdbId = res.external_ids?.imdb_id,
+                                season = eps.seasonNumber,
+                                episode = eps.episodeNumber
+                            ).toJson()
+                        ) {
+                            this.name = eps.name + if (isUpcoming(eps.airDate)) " • [PRÓXIMO]" else ""
                             this.season = eps.seasonNumber
                             this.episode = eps.episodeNumber
                             this.posterUrl = getImageUrl(eps.stillPath)
@@ -191,6 +163,7 @@ class Pelisplushd() : TmdbProvider() {
                         }
                     }
             }?.flatten() ?: listOf()
+            
             newTvSeriesLoadResponse(
                 title, url, if (isAnime) TvType.Anime else TvType.TvSeries, episodes
             ) {
@@ -198,12 +171,11 @@ class Pelisplushd() : TmdbProvider() {
                 this.backgroundPosterUrl = bgPoster
                 this.year = year
                 this.plot = res.overview
-                this.tags =  keywords.takeIf { !it.isNullOrEmpty() } ?: genres
-                this.score = Score.from10(res.vote_average.toString())
+                this.tags = keywords.takeIf { !it.isNullOrEmpty() } ?: genres
+                this.score = Score.from10(res.vote_average)
                 this.showStatus = getStatus(res.status)
                 this.recommendations = recommendations
                 this.actors = actors
-                //this.contentRating = fetchContentRating(data.id, "US")
                 addTrailer(trailer)
                 addTMDbId(data.id.toString())
                 addImdbId(res.external_ids?.imdb_id)
@@ -213,7 +185,12 @@ class Pelisplushd() : TmdbProvider() {
                 title,
                 url,
                 TvType.Movie,
-                LoadData(res.title,year,isAnime,res.external_ids?.imdb_id).toJson()
+                LoadData(
+                    title = res.title,
+                    year = year,
+                    isAnime = isAnime,
+                    imdbId = res.external_ids?.imdb_id
+                ).toJson()
             ) {
                 this.posterUrl = poster
                 this.comingSoon = isUpcoming(releaseDate)
@@ -222,19 +199,15 @@ class Pelisplushd() : TmdbProvider() {
                 this.plot = res.overview
                 this.duration = res.runtime
                 this.tags = keywords.takeIf { !it.isNullOrEmpty() } ?: genres
-                this.score = Score.from10(res.vote_average.toString())
+                this.score = Score.from10(res.vote_average)
                 this.recommendations = recommendations
                 this.actors = actors
-                //this.contentRating = fetchContentRating(data.id, "US")
                 addTrailer(trailer)
                 addTMDbId(data.id.toString())
                 addImdbId(res.external_ids?.imdb_id)
             }
         }
     }
-
-
-
 
     override suspend fun loadLinks(
         data: String,
@@ -246,93 +219,124 @@ class Pelisplushd() : TmdbProvider() {
         val season = dataObj.season
         val episode = dataObj.episode
         val id = dataObj.imdbId
-        val iframe=if(season==null) { "$mainUrl/f/$id" } else { "$mainUrl/f/$id-${season}x0$episode" }
-        val res= app.get(iframe).documentLarge
-        val jsonString = res.selectFirst("script:containsData(dataLink)")?.data()?.substringAfter("dataLink = ")?.substringBefore(";")
+        
+        // Construir URL del iframe
+        val iframe = if (season == null) { 
+            "$mainUrl/f/$id" 
+        } else { 
+            // Formatear episodio con 2 dígitos
+            val episodeFormatted = episode?.toString()?.padStart(2, '0') ?: "01"
+            "$mainUrl/f/$id-${season}x$episodeFormatted"
+        }
+        
+        val res = app.get(iframe).document
+        val jsonString = res.selectFirst("script:containsData(dataLink)")?.data()
+            ?.substringAfter("dataLink = ")
+            ?.substringBefore(";")
+            ?.trim()
 
         val allLinksByLanguage = mutableMapOf<String, MutableList<String>>()
-        if (jsonString != null) {
-            val jsonArray = JSONArray(jsonString)
+        
+        if (!jsonString.isNullOrBlank()) {
+            try {
+                val jsonArray = JSONArray(jsonString)
 
-            for (i in 0 until jsonArray.length()) {
-                val fileObject = jsonArray.getJSONObject(i)
-                val language = fileObject.getString("video_language")
-                val embeds = fileObject.getJSONArray("sortedEmbeds")
+                for (i in 0 until jsonArray.length()) {
+                    val fileObject = jsonArray.getJSONObject(i)
+                    val language = fileObject.getString("video_language")
+                    val embeds = fileObject.getJSONArray("sortedEmbeds")
 
-                val serverLinks = mutableListOf<String>()
-                for (j in 0 until embeds.length()) {
-                    val embedObj = embeds.getJSONObject(j)
-                    embedObj.optString("link").let { link ->
-                        if (link.isNotBlank()) serverLinks.add("\"$link\"")
+                    val serverLinks = mutableListOf<String>()
+                    for (j in 0 until embeds.length()) {
+                        val embedObj = embeds.getJSONObject(j)
+                        embedObj.optString("link").let { link ->
+                            if (link.isNotBlank()) serverLinks.add("\"$link\"")
+                        }
+                    }
+
+                    if (serverLinks.isNotEmpty()) {
+                        val json = JSONObject().apply {
+                            put("links", JSONArray(serverLinks))
+                        }.toString()
+                        
+                        val requestBody = json.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+
+                        val decrypted = app.post("$mainUrl/api/decrypt", requestBody = requestBody)
+                            .parsedSafe<Loadlinks>()
+
+                        if (decrypted?.success == true) {
+                            val links = decrypted.links.map { it.link }
+                            val listForLang = allLinksByLanguage.getOrPut(language) { mutableListOf() }
+                            listForLang.addAll(links)
+                        }
                     }
                 }
-
-                val json = """ {"links":$serverLinks} """.trimIndent()
-                    .toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
-
-                val decrypted = app.post("$mainUrl/api/decrypt", requestBody = json).parsedSafe<Loadlinks>()
-
-                if (decrypted?.success == true) {
-                    val links = decrypted.links.map { it.link }
-                    val listForLang = allLinksByLanguage.getOrPut(language) { mutableListOf() }
-                    listForLang.addAll(links)
-                }
+            } catch (e: Exception) {
+                Log.e("Pelisplushd", "Error parsing JSON", e)
             }
         } else {
-            println("dataLink not found in response")
+            Log.d("Pelisplushd", "dataLink not found in response")
         }
 
+        // Cargar enlaces
         for ((language, links) in allLinksByLanguage) {
             links.forEach { link ->
-                loadSourceNameExtractor(language.capitalize(),link,"",subtitleCallback,callback)
+                loadExtractor(link, "$mainUrl/", subtitleCallback, callback)
             }
         }
 
-        Log.d("Phisher",allLinksByLanguage.toJson())
-        // Subtitles
-        val subApiUrl = "https://opensubtitles-v3.strem.io"
-        val url = if (season == null) "$subApiUrl/subtitles/movie/$id.json"
-        else "$subApiUrl/subtitles/series/$id:$season:$episode.json"
+        // Subtítulos
+        try {
+            val subApiUrl = "https://opensubtitles-v3.strem.io"
+            val subUrl = if (season == null) {
+                "$subApiUrl/subtitles/movie/$id.json"
+            } else {
+                "$subApiUrl/subtitles/series/$id:$season:$episode.json"
+            }
 
-        val headers = mapOf(
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "User-Agent" to "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        )
+            val headers = mapOf(
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "User-Agent" to USER_AGENT,
+            )
 
-        app.get(url, headers = headers, timeout = 100L)
-            .parsedSafe<Subtitles>()?.subtitles?.amap {
-                val lan = getLanguage(it.lang) ?: it.lang
+            val subtitles = app.get(subUrl, headers = headers, timeout = 100L)
+                .parsedSafe<Subtitles>()?.subtitles
+                
+            subtitles?.amap { sub ->
+                val lang = getLanguage(sub.lang) ?: sub.lang
                 subtitleCallback(
                     newSubtitleFile(
-                        lan,
-                        it.url
+                        lang,
+                        sub.url
                     )
                 )
             }
+        } catch (e: Exception) {
+            Log.e("Pelisplushd", "Error loading subtitles", e)
+        }
 
         return true
     }
 }
 
 data class Subtitles(
-    val subtitles: List<Subtitle>,
-    val cacheMaxAge: Long,
+    val subtitles: List<Subtitle>?,
+    val cacheMaxAge: Long?,
 )
 
 data class Subtitle(
-    val id: String,
+    val id: String?,
     val url: String,
     @JsonProperty("SubEncoding")
-    val subEncoding: String,
+    val subEncoding: String?,
     val lang: String,
-    val m: String,
-    val g: String,
+    val m: String?,
+    val g: String?,
 )
-
 
 data class Loadlinks(
     val success: Boolean,
-    val links: List<Link>,
+    val links: List<Link>?,
 )
 
 data class Link(
@@ -340,3 +344,114 @@ data class Link(
     val link: String,
 )
 
+data class Data(
+    val id: Int,
+    val type: String?,
+)
+
+data class LoadData(
+    val title: String? = null,
+    val year: Int? = null,
+    val isAnime: Boolean = false,
+    val imdbId: String? = null,
+    val season: Int? = null,
+    val episode: Int? = null,
+)
+
+// Modelos TMDB
+data class Results(
+    val results: List<Media>?,
+    val page: Int?,
+    val total_pages: Int?,
+    val total_results: Int?,
+)
+
+data class Media(
+    val id: Int,
+    val title: String?,
+    val name: String?,
+    val originalTitle: String?,
+    val overview: String?,
+    val posterPath: String?,
+    val backdropPath: String?,
+    val voteAverage: Double,
+    val mediaType: String?,
+)
+
+data class MediaDetail(
+    val id: Int,
+    val title: String?,
+    val name: String?,
+    val overview: String?,
+    val posterPath: String?,
+    val backdropPath: String?,
+    val releaseDate: String?,
+    val firstAirDate: String?,
+    val vote_average: Double,
+    val runtime: Int?,
+    val status: String?,
+    val original_language: String?,
+    val genres: List<Genre>?,
+    val keywords: Keywords?,
+    val credits: Credits?,
+    val external_ids: ExternalIds?,
+    val videos: Videos?,
+    val recommendations: Results?,
+    val seasons: List<Season>?,
+)
+
+data class Genre(
+    val id: Int,
+    val name: String,
+)
+
+data class Keywords(
+    val results: List<Keyword>?,
+    val keywords: List<Keyword>?,
+)
+
+data class Keyword(
+    val id: Int,
+    val name: String,
+)
+
+data class Credits(
+    val cast: List<Cast>?,
+)
+
+data class Cast(
+    val name: String?,
+    val originalName: String?,
+    val character: String?,
+    val profilePath: String?,
+)
+
+data class ExternalIds(
+    val imdb_id: String?,
+)
+
+data class Videos(
+    val results: List<Video>?,
+)
+
+data class Video(
+    val key: String,
+)
+
+data class Season(
+    val seasonNumber: Int,
+)
+
+data class MediaDetailEpisodes(
+    val episodes: List<EpisodeDetail>?,
+)
+
+data class EpisodeDetail(
+    val name: String?,
+    val overview: String?,
+    val stillPath: String?,
+    val airDate: String?,
+    val seasonNumber: Int,
+    val episodeNumber: Int,
+    val voteAverage: Double,
+)
