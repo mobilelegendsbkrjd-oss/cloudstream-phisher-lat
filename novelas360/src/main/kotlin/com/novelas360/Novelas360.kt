@@ -79,14 +79,10 @@ class Novelas360 : MainAPI() {
         val poster = fixUrl(doc.selectFirst("meta[property=og:image]")?.attr("content"))
         val plot = doc.selectFirst("meta[name=description]")?.attr("content")
 
-        val episodes = mutableListOf<Episode>()
-
-        doc.select("div.item h3 a").forEach { el ->
-            episodes.add(
-                newEpisode(el.attr("href")) {
-                    this.name = el.text().trim()
-                }
-            )
+        val episodes = doc.select("div.item h3 a").map { el ->
+            newEpisode(el.attr("href")) {
+                this.name = el.text().trim()
+            }
         }
 
         return newTvSeriesLoadResponse(
@@ -101,7 +97,7 @@ class Novelas360 : MainAPI() {
     }
 
     // ===============================
-    // LOAD LINKS (COMPATIBLE CON TU API)
+    // LOAD LINKS
     // ===============================
 
     override suspend fun loadLinks(
@@ -113,6 +109,7 @@ class Novelas360 : MainAPI() {
 
         val id = data.substringAfterLast("/")
 
+        // 1️⃣ Obtener embed
         val embedResponse = app.get(
             "$mainUrl/player/embed_player.php?vid=$id&pop=0",
             headers = mapOf(
@@ -129,6 +126,7 @@ class Novelas360 : MainAPI() {
 
         val cookies = embedResponse.cookies
 
+        // 2️⃣ Post a get_md5
         val postBody = """
         {
           "htoken":"",
@@ -166,15 +164,15 @@ class Novelas360 : MainAPI() {
             ?.value
             ?: return false
 
-        // 👇 ESTA ES LA FIRMA QUE TU API ESPERA
+        // 3️⃣ Enviar enlace (firma correcta)
         callback.invoke(
             newExtractorLink(
-                name,
-                mapOf(
+                name = "Novelas360",
+                url = m3u8,
+                headers = mapOf(
                     "User-Agent" to chromeUA,
                     "Referer" to mainUrl
-                ),
-                m3u8
+                )
             )
         )
 
