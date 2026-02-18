@@ -81,32 +81,19 @@ class Novelas360 : MainAPI() {
 
         val episodes = mutableListOf<Episode>()
 
-        var pageCount = 1
-        while (pageCount <= 50) {
-            val pageUrl =
-                if (pageCount == 1) url
-                else "${url.trimEnd('/')}/page/$pageCount/"
-
-            val pageDoc = try { getDoc(pageUrl) } catch (_: Exception) { null }
-            val items = pageDoc?.select("div.item h3 a") ?: break
-            if (items.isEmpty()) break
-
-            items.forEach { el ->
-                episodes.add(
-                    newEpisode(el.attr("href")) {
-                        this.name = el.text().trim()
-                    }
-                )
-            }
-
-            pageCount++
+        doc.select("div.item h3 a").forEach { el ->
+            episodes.add(
+                newEpisode(el.attr("href")) {
+                    this.name = el.text().trim()
+                }
+            )
         }
 
         return newTvSeriesLoadResponse(
             title,
             url,
             TvType.TvSeries,
-            episodes.distinctBy { it.data }.reversed()
+            episodes.reversed()
         ) {
             this.posterUrl = poster
             this.plot = plot
@@ -114,7 +101,7 @@ class Novelas360 : MainAPI() {
     }
 
     // ===============================
-    // LOAD LINKS (PLAYER REAL)
+    // LOAD LINKS (COMPATIBLE CON TU API)
     // ===============================
 
     override suspend fun loadLinks(
@@ -126,7 +113,6 @@ class Novelas360 : MainAPI() {
 
         val id = data.substringAfterLast("/")
 
-        // 1️⃣ Obtener embed
         val embedResponse = app.get(
             "$mainUrl/player/embed_player.php?vid=$id&pop=0",
             headers = mapOf(
@@ -136,16 +122,13 @@ class Novelas360 : MainAPI() {
             )
         )
 
-        val embedHtml = embedResponse.text
-
         val sh = Regex("""["']sh["']\s*[:=]\s*["']([a-f0-9]+)["']""")
-            .find(embedHtml)
+            .find(embedResponse.text)
             ?.groupValues?.get(1)
             ?: return false
 
         val cookies = embedResponse.cookies
 
-        // 2️⃣ Post a get_md5
         val postBody = """
         {
           "htoken":"",
@@ -183,21 +166,16 @@ class Novelas360 : MainAPI() {
             ?.value
             ?: return false
 
-        // 3️⃣ Enviar a reproductor (API VIEJA)
+        // 👇 ESTA ES LA FIRMA QUE TU API ESPERA
         callback.invoke(
             newExtractorLink(
-                source = name,
-                name = name,
-                url = m3u8
-            ) {
-                this.referer = mainUrl
-                this.quality = Qualities.Unknown.value
-                this.isM3u8 = true
-                this.headers = mapOf(
+                name,
+                mapOf(
                     "User-Agent" to chromeUA,
                     "Referer" to mainUrl
-                )
-            }
+                ),
+                m3u8
+            )
         )
 
         return true
