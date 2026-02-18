@@ -87,37 +87,82 @@ class Novelas360 : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = getDoc(data)
 
-        document.select("iframe").forEach { iframe ->
-            val src = fixUrl(iframe.attr("src")) ?: return@forEach
-            
-            val iframeRes = try { app.get(src, referer = data) } catch(e: Exception) { null }
-            val iframeHtml = iframeRes?.text ?: ""
-            val iframeCookie = iframeRes?.headers?.get("set-cookie") ?: ""
+        val id = data.substringAfterLast("/")
 
-            Regex("""(https?.*?\.(?:m3u8|mp4).*?)["']""").findAll(iframeHtml).forEach { match ->
-                val videoUrl = match.groupValues[1].replace("\\/", "/")
-                
-                callback(
-                    newExtractorLink("Novelas360", "Servidor Directo", videoUrl) {
-                        this.quality = Qualities.Unknown.value
-                        // Creamos un mapa local de headers para evitar el error de reasignación 'val'
-                        val videoHeaders = mutableMapOf(
-                            "User-Agent" to chromeUA,
-                            "Referer" to src,
-                            "Origin" to "https://novelas360.cyou"
-                        )
-                        if (iframeCookie.isNotEmpty()) videoHeaders["Cookie"] = iframeCookie
-                        this.headers = videoHeaders
-                    }
+        // STEP 1 - Get embed_player
+        val embedRes = app.get(
+            "$mainUrl/player/embed_player.php?vid=$id&pop=0",
+            headers = mapOf(
+                "Referer" to "$mainUrl/e/$id",
+                "Origin" to mainUrl,
+                "User-Agent" to chromeUA
+            )
+        )
+
+        val embed = embedRes.text
+
+        // STEP 2 - Extract sh
+        val sh = Regex("""sh\s*[:=]\s*"([a-f0-9]+)"""")
+            .find(embed)
+            ?.groupValues?.get(1)
+            ?: return false
+
+        // STEP 3 - Prepare POST
+        val postData = mapOf(
+            "htoken" to "",
+            "sh" to sh,
+            "ver" to "4",
+            "secure" to "0",
+            "adb" to "96958",
+            "v" to id,
+            "token" to "",
+            "gt" to "",
+            "embed_from" to "0",
+            "wasmcheck" to "0",
+            "adscore" to "",
+            "click_hash" to "",
+            "clickx" to "0",
+            "clicky" to "0"
+        )
+
+        val md5Res = app.post(
+            "$mainUrl/player/get_md5.php",
+            data = postData,
+            headers = mapOf(
+                "Referer" to "$mainUrl/e/$id",
+                "Origin" to mainUrl,
+                "User-Agent" to chromeUA,
+                "X-Requested-With" to "XMLHttpRequest"
+            )
+        )
+
+        val body = md5Res.text
+
+        // STEP 4 - Extract m3u8
+        val m3u8 = Regex("""https?:\/\/.*?\.m3u8.*?""")
+            .find(body)
+            ?.value
+            ?: return false
+
+        callback.invoke(
+            newExtractorLink(
+                source = "Novelas360",
+                name = "Novelas360",
+                url = m3u8
+            ) {
+                this.referer = mainUrl
+                this.quality = Qualities.Unknown.value
+                this.type = ExtractorLinkType.M3U8
+                this.headers = mapOf(
+                    "User-Agent" to chromeUA,
+                    "Referer" to mainUrl
                 )
             }
-            loadExtractor(src, data, subtitleCallback, callback)
-        }
+        )
+
         return true
     }
-
     private fun Element.toSearchResult(): SearchResponse? {
         val href = attr("href")
         if (href.isBlank() || href.contains("/tag/")) return null

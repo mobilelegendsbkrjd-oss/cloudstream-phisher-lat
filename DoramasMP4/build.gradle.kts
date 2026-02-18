@@ -1,7 +1,7 @@
 version = 1
 
 cloudstream {
-    description = "Pandrama - Doramas y Películas"
+    description = "DoramasMP4 - Doramas y Películas"
     language = "mx"
     authors = listOf("bkrjd")
 
