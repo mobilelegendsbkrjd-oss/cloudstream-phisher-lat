@@ -2,7 +2,10 @@ package com.pelisplushd
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.getQualityFromName
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
@@ -83,7 +86,7 @@ class Pelisplushd : MainAPI() {
                         name,
                         cast.profilePath?.let { "https://image.tmdb.org/t/p/w185$it" }
                     ),
-                    roleString = cast.character
+                    cast.character
                 )
             }
         } ?: emptyList()
@@ -113,7 +116,7 @@ class Pelisplushd : MainAPI() {
                             this.episode = ep.episodeNumber
                             this.posterUrl = ep.stillPath?.let { "https://image.tmdb.org/t/p/w300$it" }
                             this.description = ep.overview
-                            this.addDate(ep.airDate)
+                            ep.airDate?.let { this.addDate(it) }
                         }
                     )
                 }
@@ -127,9 +130,9 @@ class Pelisplushd : MainAPI() {
                 this.tags = details.genres?.map { it.name }
                 this.score = details.voteAverage?.let { Score.from10(it) }
                 this.actors = actors
-                addTrailer(trailer)
-                addImdbId(details.externalIds?.imdbId)
-                addTMDbId(data.id.toString())
+                trailer?.let { this.addTrailer(it) }
+                details.externalIds?.imdbId?.let { this.addImdbId(it) }
+                this.addTMDbId(data.id.toString())
             }
         } else {
             return newMovieLoadResponse(title, url, TvType.Movie, LoadData(imdbId = details.externalIds?.imdbId).toJson()) {
@@ -141,9 +144,9 @@ class Pelisplushd : MainAPI() {
                 this.tags = details.genres?.map { it.name }
                 this.score = details.voteAverage?.let { Score.from10(it) }
                 this.actors = actors
-                addTrailer(trailer)
-                addImdbId(details.externalIds?.imdbId)
-                addTMDbId(data.id.toString())
+                trailer?.let { this.addTrailer(it) }
+                details.externalIds?.imdbId?.let { this.addImdbId(it) }
+                this.addTMDbId(data.id.toString())
             }
         }
     }
@@ -206,7 +209,7 @@ class Pelisplushd : MainAPI() {
                                 if (videoUrl.isNotBlank()) {
                                     callback.invoke(
                                         newExtractorLink(
-                                            name,
+                                            this.name,
                                             "${language.uppercase()} ${i + 1}",
                                             videoUrl,
                                             ExtractorLinkType.M3U8
