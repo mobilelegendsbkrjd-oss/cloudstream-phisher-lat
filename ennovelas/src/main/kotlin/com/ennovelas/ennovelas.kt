@@ -21,7 +21,7 @@ class EnNovelas : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "$mainUrl/pro/" to "Últimos Capítulos",
+        "$mainUrl/episodes" to "Últimos Capítulos",
         "$mainUrl/series" to "Series",
         "$mainUrl/movies" to "Películas"
     )
@@ -31,15 +31,15 @@ class EnNovelas : MainAPI() {
             "Últimos Capítulos" -> "$mainUrl/episodes"
             "Series" -> "$mainUrl/series"
             "Películas" -> "$mainUrl/movies"
-            else -> "$mainUrl/pro/"
+            else -> "$mainUrl/episodes"
         }
         
         val doc = app.get(url).document
-        val items = doc.select("#load-post article .block-post").mapNotNull { element ->
+        val items = doc.select("#load-post article .block-post, .block-post").mapNotNull { element ->
             elementToSearchResponse(element)
         }
         
-        return newHomePageResponse(listOf(HomePageList(request.name, items)))
+        return newHomePageResponse(listOf(HomePageList(request.name, items.take(20))))
     }
 
     private fun elementToSearchResponse(element: Element): SearchResponse? {
@@ -51,19 +51,22 @@ class EnNovelas : MainAPI() {
         var img = element.select("img").attr("data-img")
         if (img.isBlank()) {
             // Para series, la imagen está en un div con data-img
-            img = element.select(".imgSer").attr("data-img")
-                .removePrefix("background-image:url(")
-                .removeSuffix(");")
+            val imgSer = element.select(".imgSer").attr("data-img")
+            if (imgSer.isNotBlank()) {
+                img = imgSer.removePrefix("background-image:url(").removeSuffix(");")
+            }
         }
         if (img.isBlank()) {
             img = element.select("img").attr("src")
         }
         
+        // Limpiar URL de imagen
+        img = img.replace("url(", "").replace(")", "").replace("'", "").replace("\"", "")
+        
         // Determinar si es serie o película basado en la URL
         val type = when {
             link.contains("/series/") -> TvType.TvSeries
-            link.contains("/movies/") -> TvType.Movie
-            link.contains("/pro/") -> TvType.TvSeries // Los episodios están en /pro/
+            link.contains("/movies/") || link.contains("/pelicula/") -> TvType.Movie
             else -> TvType.TvSeries
         }
 
@@ -81,8 +84,9 @@ class EnNovelas : MainAPI() {
         if (query.startsWith(PREFIX_SEARCH)) {
             val id = query.removePrefix(PREFIX_SEARCH)
             val doc = app.get("$mainUrl/$id").document
+            val title = doc.selectFirst("h1")?.text() ?: ""
             return listOf(
-                newTvSeriesSearchResponse("", "$mainUrl/$id", TvType.TvSeries) {
+                newTvSeriesSearchResponse(title, "$mainUrl/$id", TvType.TvSeries) {
                     this.posterUrl = fixUrlNull(doc.selectFirst("img")?.attr("src"))
                 }
             )
@@ -119,12 +123,10 @@ class EnNovelas : MainAPI() {
             TvType.Movie -> newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = fixUrlNull(poster)
                 this.plot = description
-                this.tags = doc.select(".genres a").map { it.text() }
             }
             else -> newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = fixUrlNull(poster)
                 this.plot = description
-                this.tags = doc.select(".genres a").map { it.text() }
             }
         }
     }
@@ -133,26 +135,34 @@ class EnNovelas : MainAPI() {
         val episodes = mutableListOf<Episode>()
         
         // Buscar episodios en la estructura actual
-        document.select(".episodes-list li, .block-post").forEachIndexed { index, element ->
-            val epUrl = element.select("a").attr("href").takeIf { it.isNotBlank() } 
-                ?: element.select("a").attr("abs:href") ?: return@forEachIndexed
+        document.select(".block-post, .episode-item").forEachIndexed { index, element ->
+            val epUrl = element.select("a").attr("abs:href").takeIf { it.isNotBlank() } 
+                ?: element.select("a").attr("href") ?: return@forEachIndexed
             
             // Solo procesar si es un enlace de episodio
-            if (!epUrl.contains("/episodio/") && !epUrl.contains("/pro/")) return@forEachIndexed
+            if (!epUrl.contains("/pro/") && !epUrl.contains("/episodio/") && !epUrl.contains("/episode/")) {
+                return@forEachIndexed
+            }
             
             val epTitle = element.select(".title, .episode-title").text().takeIf { it.isNotBlank() }
                 ?: "Episodio ${index + 1}"
             
             // Extraer número de episodio
-            val epNumber = Regex("""(?:capitulo|ep(?:isode)?)\s*(\d+)""", RegexOption.IGNORE_CASE)
+            val epNumber = Regex("""(?:capitulo|ep(?:isode)?|cap)\s*(\d+)""", RegexOption.IGNORE_CASE)
                 .find(epTitle)?.groupValues?.get(1)?.toIntOrNull() ?: (index + 1)
+
+            // Obtener imagen del episodio
+            var epPoster = element.select("img").attr("data-img")
+            if (epPoster.isBlank()) {
+                epPoster = element.select("img").attr("src")
+            }
 
             episodes.add(
                 newEpisode(epUrl) {
                     name = epTitle
                     episode = epNumber
                     season = 1
-                    posterUrl = fixUrlNull(element.select("img").attr("data-img"))
+                    posterUrl = fixUrlNull(epPoster)
                 }
             )
         }
@@ -169,16 +179,20 @@ class EnNovelas : MainAPI() {
         return coroutineScope {
             try {
                 val doc = app.get(data).document
+                var hasLinks = false
                 
                 // Buscar iframes de video
                 val iframes = doc.select("iframe[src]").map { it.attr("abs:src") }
                     .filter { it.isNotBlank() && it.contains("embed") }
                 
                 if (iframes.isNotEmpty()) {
-                    iframes.forEach { iframeUrl ->
-                        async { loadExtractor(iframeUrl, data, subtitleCallback, callback) }
-                    }.awaitAll()
-                    return@coroutineScope true
+                    val jobs = iframes.map { iframeUrl ->
+                        async {
+                            loadExtractor(iframeUrl, data, subtitleCallback, callback)
+                        }
+                    }
+                    jobs.awaitAll()
+                    hasLinks = true
                 }
 
                 // Buscar enlaces directos de video
@@ -191,15 +205,18 @@ class EnNovelas : MainAPI() {
                                 "Directo",
                                 videoUrl,
                                 data
-                            )
+                            ) {
+                                this.quality = Qualities.Unknown.value
+                            }
                         )
+                        hasLinks = true
                     }
                 }
 
-                true
+                return@coroutineScope hasLinks
             } catch (e: Exception) {
                 e.printStackTrace()
-                false
+                return@coroutineScope false
             }
         }
     }
