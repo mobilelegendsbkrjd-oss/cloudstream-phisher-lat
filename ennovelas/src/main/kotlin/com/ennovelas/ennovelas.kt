@@ -2,7 +2,6 @@ package com.ennovelas
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.ExtractorLink
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -10,139 +9,155 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
 class EnNovelas : MainAPI() {
-    override var mainUrl = "https://tv.ennovelas.net"
+    override var mainUrl = "https://l.ennovelas-tv.com"
     override var name = "EnNovelas"
     override var lang = "es"
     override val hasMainPage = true
     override val hasChromecastSupport = true
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(
-        TvType.TvSeries
+        TvType.TvSeries,
+        TvType.Movie
     )
 
     override val mainPage = mainPageOf(
-        "$mainUrl/category/novelas-completas/page/" to "Populares"
+        "$mainUrl/pro/" to "Últimos Capítulos",
+        "$mainUrl/series" to "Series",
+        "$mainUrl/movies" to "Películas"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        val doc = app.get("$mainUrl/category/novelas-completas/page/$page").document
-        val items = doc.select(".block-post").mapNotNull { element ->
-            val href = element.select("a").attr("href")
-            val title = element.select("a .title").text()
-            val img = element.select("a img").attr("data-img")
-            
-            newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+        val url = when (request.name) {
+            "Últimos Capítulos" -> "$mainUrl/episodes"
+            "Series" -> "$mainUrl/series"
+            "Películas" -> "$mainUrl/movies"
+            else -> "$mainUrl/pro/"
+        }
+        
+        val doc = app.get(url).document
+        val items = doc.select("#load-post article .block-post").mapNotNull { element ->
+            elementToSearchResponse(element)
+        }
+        
+        return newHomePageResponse(listOf(HomePageList(request.name, items)))
+    }
+
+    private fun elementToSearchResponse(element: Element): SearchResponse? {
+        val link = element.select("a").attr("href").takeIf { it.isNotBlank() } ?: return null
+        val title = element.select(".title").text().takeIf { it.isNotBlank() } 
+            ?: element.select("a").attr("title") ?: return null
+        
+        // Manejar diferentes tipos de imágenes
+        var img = element.select("img").attr("data-img")
+        if (img.isBlank()) {
+            // Para series, la imagen está en un div con data-img
+            img = element.select(".imgSer").attr("data-img")
+                .removePrefix("background-image:url(")
+                .removeSuffix(");")
+        }
+        if (img.isBlank()) {
+            img = element.select("img").attr("src")
+        }
+        
+        // Determinar si es serie o película basado en la URL
+        val type = when {
+            link.contains("/series/") -> TvType.TvSeries
+            link.contains("/movies/") -> TvType.Movie
+            link.contains("/pro/") -> TvType.TvSeries // Los episodios están en /pro/
+            else -> TvType.TvSeries
+        }
+
+        return when (type) {
+            TvType.Movie -> newMovieSearchResponse(title, link, TvType.Movie) {
+                this.posterUrl = fixUrlNull(img)
+            }
+            else -> newTvSeriesSearchResponse(title, link, TvType.TvSeries) {
                 this.posterUrl = fixUrlNull(img)
             }
         }
-        return newHomePageResponse(listOf(HomePageList(request.name, items)))
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.startsWith(PREFIX_SEARCH)) {
             val id = query.removePrefix(PREFIX_SEARCH)
-            val doc = app.get("$mainUrl/search/$id").document
-            val title = doc.selectFirst("[itemprop=\"name\"] a")?.text() ?: ""
-            val poster = doc.selectFirst("div.poster img")?.attr("src") ?: ""
-            
+            val doc = app.get("$mainUrl/$id").document
             return listOf(
-                newTvSeriesSearchResponse(title, "$mainUrl/search/$id", TvType.TvSeries) {
-                    this.posterUrl = fixUrlNull(poster)
+                newTvSeriesSearchResponse("", "$mainUrl/$id", TvType.TvSeries) {
+                    this.posterUrl = fixUrlNull(doc.selectFirst("img")?.attr("src"))
                 }
             )
         }
 
-        val doc = app.get("$mainUrl/search/$query/page/1/").document
+        val searchUrl = "$mainUrl/?s=$query"
+        val doc = app.get(searchUrl).document
         return doc.select(".block-post").mapNotNull { element ->
-            if (element.selectFirst("a")?.attr("href")?.contains("/series/") == true) {
-                val href = element.select("a").attr("href")
-                val title = element.select("a .title").text()
-                val img = element.select("a img").attr("data-img")
-                
-                newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
-                    this.posterUrl = fixUrlNull(img)
-                }
-            } else null
+            elementToSearchResponse(element)
         }
     }
 
     override suspend fun load(url: String): LoadResponse? {
         val doc = app.get(url).document
         
-        val title = doc.selectFirst("[itemprop=\"name\"] a")?.text() ?: ""
-        val description = doc.selectFirst(".postDesc .post-entry div")?.text() ?: title
-        val genre = doc.select("ul.postlist li:nth-child(1) span a").joinToString { it.text() }
-        val statusText = doc.select("ul.postlist li:nth-child(8) .getMeta span a").text().trim()
-        val poster = doc.selectFirst("div.poster img")?.attr("src") ?: ""
+        val title = doc.selectFirst("h1, .title, .entry-title")?.text() ?: ""
+        val description = doc.selectFirst(".postDesc .post-entry div, .description, .sinopsis")?.text() ?: ""
+        
+        // Intentar diferentes selectores para el poster
+        var poster = doc.selectFirst("img.imgLoaded")?.attr("data-img") ?: ""
+        if (poster.isBlank()) poster = doc.selectFirst("img")?.attr("src") ?: ""
+        
+        val type = when {
+            url.contains("/movies/") || url.contains("/pelicula/") -> TvType.Movie
+            else -> TvType.TvSeries
+        }
 
-        // Obtener episodios
-        val episodes = getEpisodeListFromDocument(doc, url)
+        // Obtener episodios para series
+        val episodes = if (type == TvType.TvSeries) {
+            getEpisodesFromDocument(doc, url)
+        } else emptyList()
 
-        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-            this.posterUrl = fixUrlNull(poster)
-            this.plot = description
-            this.tags = listOfNotNull(genre.takeIf { it.isNotEmpty() })
-            this.year = parseStatus(statusText)
+        return when (type) {
+            TvType.Movie -> newMovieLoadResponse(title, url, TvType.Movie, url) {
+                this.posterUrl = fixUrlNull(poster)
+                this.plot = description
+                this.tags = doc.select(".genres a").map { it.text() }
+            }
+            else -> newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+                this.posterUrl = fixUrlNull(poster)
+                this.plot = description
+                this.tags = doc.select(".genres a").map { it.text() }
+            }
         }
     }
 
-    private suspend fun getEpisodeListFromDocument(document: Document, baseUrl: String): List<Episode> {
-        val episodeList = mutableListOf<Episode>()
-        val seasonIds = document.select(".listSeasons li[data-season]")
-        var noEp = 1F
-
-        if (seasonIds.isNotEmpty()) {
-            seasonIds.reversed().forEach { seasonElement ->
-                try {
-                    val headers = mapOf(
-                        "authority" to mainUrl.replace("https://", ""),
-                        "referer" to baseUrl,
-                        "accept" to "*/*",
-                        "accept-language" to "es-MX,es;q=0.9,en;q=0.8",
-                        "x-requested-with" to "XMLHttpRequest",
-                        "user-agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                    )
-
-                    val season = getNumberFromEpsString(seasonElement.text())
-                    
-                    val seasonDoc = app.get(
-                        "$mainUrl/wp-content/themes/vo2022/temp/ajax/seasons.php?seriesID=${seasonElement.attr("data-season")}",
-                        headers = headers
-                    ).document
-
-                    seasonDoc.select(".block-post").forEach { element ->
-                        val epUrl = element.selectFirst("a")?.attr("href") ?: return@forEach
-                        val noEpisode = getNumberFromEpsString(
-                            element.selectFirst("a .episodeNum span:nth-child(2)")?.text() ?: ""
-                        ).ifEmpty { noEp.toString() }
-
-                        val ep = newEpisode(epUrl) {
-                            this.name = "T$season - E$noEpisode - Cap" + 
-                                (element.selectFirst("a .title")?.text()?.substringAfter("Cap") ?: "")
-                            this.episode = noEpisode.toIntOrNull() ?: noEp.toInt()
-                            this.season = season.toIntOrNull() ?: 1
-                        }
-                        episodeList.add(ep)
-                        noEp += 1
-                    }
-                } catch (_: Exception) {}
-            }
-        } else {
-            document.select(".block-post").forEach { element ->
-                val epUrl = element.selectFirst("a")?.attr("href") ?: return@forEach
-                val noEpisode = getNumberFromEpsString(
-                    element.selectFirst("a .episodeNum span:nth-child(2)")?.text() ?: ""
-                )
-                
-                val ep = newEpisode(epUrl) {
-                    this.name = "Cap" + (element.selectFirst("a .title")?.text()?.substringAfter("Cap") ?: "")
-                    this.episode = noEpisode.toIntOrNull() ?: 1
-                }
-                episodeList.add(ep)
-            }
-        }
+    private suspend fun getEpisodesFromDocument(document: Document, baseUrl: String): List<Episode> {
+        val episodes = mutableListOf<Episode>()
         
-        return episodeList.reversed()
+        // Buscar episodios en la estructura actual
+        document.select(".episodes-list li, .block-post").forEachIndexed { index, element ->
+            val epUrl = element.select("a").attr("href").takeIf { it.isNotBlank() } 
+                ?: element.select("a").attr("abs:href") ?: return@forEachIndexed
+            
+            // Solo procesar si es un enlace de episodio
+            if (!epUrl.contains("/episodio/") && !epUrl.contains("/pro/")) return@forEachIndexed
+            
+            val epTitle = element.select(".title, .episode-title").text().takeIf { it.isNotBlank() }
+                ?: "Episodio ${index + 1}"
+            
+            // Extraer número de episodio
+            val epNumber = Regex("""(?:capitulo|ep(?:isode)?)\s*(\d+)""", RegexOption.IGNORE_CASE)
+                .find(epTitle)?.groupValues?.get(1)?.toIntOrNull() ?: (index + 1)
+
+            episodes.add(
+                newEpisode(epUrl) {
+                    name = epTitle
+                    episode = epNumber
+                    season = 1
+                    posterUrl = fixUrlNull(element.select("img").attr("data-img"))
+                }
+            )
+        }
+
+        return episodes.distinctBy { it.url }.sortedBy { it.episode }
     }
 
     override suspend fun loadLinks(
@@ -154,64 +169,39 @@ class EnNovelas : MainAPI() {
         return coroutineScope {
             try {
                 val doc = app.get(data).document
-                val form = doc.selectFirst("#btnServers form") ?: return@coroutineScope false
                 
-                val urlRequest = form.attr("action")
-                val watch = form.selectFirst("input")?.attr("value") ?: return@coroutineScope false
-                val domainUrl = urlRequest.substringBefore("/wp-content")
+                // Buscar iframes de video
+                val iframes = doc.select("iframe[src]").map { it.attr("abs:src") }
+                    .filter { it.isNotBlank() && it.contains("embed") }
+                
+                if (iframes.isNotEmpty()) {
+                    iframes.forEach { iframeUrl ->
+                        async { loadExtractor(iframeUrl, data, subtitleCallback, callback) }
+                    }.awaitAll()
+                    return@coroutineScope true
+                }
 
-                val body = mapOf(
-                    "watch" to watch,
-                    "submit" to ""
-                )
-
-                val headers = mapOf(
-                    "authority" to domainUrl.replace("https://", ""),
-                    "accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-                    "accept-language" to "es-MX,es;q=0.9,en;q=0.8",
-                    "content-type" to "application/x-www-form-urlencoded",
-                    "origin" to mainUrl,
-                    "referer" to "$mainUrl/",
-                    "upgrade-insecure-requests" to "1"
-                )
-
-                val postDoc = app.post(urlRequest, headers = headers, data = body).document
-
-                val jobs = postDoc.select(".serversList li").map { element ->
-                    async {
-                        try {
-                            val frameString = element.attr("abs:data-server")
-                            var link = frameString.substringAfter("src='").substringBefore("'")
-                                .replace("https://api.mycdn.moe/sblink.php?id=", "https://streamsb.net/e/")
-                                .replace("https://api.mycdn.moe/uqlink.php?id=", "https://uqload.co/embed-")
-
-                            if (link.contains("uqload") && !link.contains(".html")) {
-                                link = "$link.html"
-                            }
-                            
-                            loadExtractor(link, data, subtitleCallback, callback)
-                        } catch (_: Exception) {}
+                // Buscar enlaces directos de video
+                doc.select("video source[src], a[href$=.mp4], a[href$=.m3u8]").forEach { element ->
+                    val videoUrl = element.attr("abs:src").ifEmpty { element.attr("abs:href") }
+                    if (videoUrl.isNotBlank()) {
+                        callback.invoke(
+                            newExtractorLink(
+                                "direct",
+                                "Directo",
+                                videoUrl,
+                                data
+                            )
+                        )
                     }
                 }
-                jobs.awaitAll()
+
                 true
             } catch (e: Exception) {
                 e.printStackTrace()
                 false
             }
         }
-    }
-
-    private fun parseStatus(statusString: String): Int? {
-        return when {
-            statusString.contains("Continuous") -> 1
-            statusString.contains("Finished") -> 2
-            else -> null
-        }
-    }
-
-    private fun getNumberFromEpsString(epsStr: String): String {
-        return epsStr.filter { it.isDigit() }
     }
 
     companion object {
