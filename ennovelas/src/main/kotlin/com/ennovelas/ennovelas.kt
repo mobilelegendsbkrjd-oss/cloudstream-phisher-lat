@@ -99,54 +99,16 @@ class EnNovelas : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean = coroutineScope {
-        val episodeDoc = app.get(data, headers = headers).document
+        val doc = app.get(data).document
 
-        // Extraer URL del botón "Ver Capítulo"
-        val proxyUrl = episodeDoc.selectFirst("a[href*='a.poiw.online/enn.php?post=']")
-            ?.attr("href")
+       
+        val proxyUrl = doc.selectFirst("a[href*='a.poiw.online/enn.php?post=']")?.attr("href")
             ?: return@coroutineScope false
 
-        // Cargar la página intermedia (blog/proxy) con referer del episodio
-        val proxyResponse = app.get(proxyUrl, referer = data, headers = headers)
-        if (!proxyResponse.isSuccessful) return@coroutineScope false
+        
+        val extractor = PoiwExtractor()
+        extractor.getUrl(proxyUrl, data, subtitleCallback, callback)
 
-        // Decodificar base64 (ya lo tenemos de la URL)
-        val base64Part = proxyUrl.substringAfter("post=").trim()
-        val servers: Map<String, String> = try {
-            val decoded = String(Base64.getDecoder().decode(base64Part))
-            Json.decodeFromString(decoded)
-        } catch (e: Exception) {
-            return@coroutineScope false
-        }
-
-        if (servers.isEmpty()) return@coroutineScope false
-
-        fun fixEmbed(url: String): String {
-            return url.replace("\\/", "/")
-                .replace("uqload.net", "uqload.to")
-                .replace("uqload.com", "uqload.to")
-                .replace("vidspeeds.com", "vidsspeeds.com")
-                .replace("vidhide.com", "vidhidepro.com")
-        }
-
-        var found = false
-
-        // Prioridad: Uqload > Vidspeeds > VK (como en tu intento)
-        listOf("uqload", "vidsspeeds", "vidspeeds", "vk").forEach { key ->
-            servers[key]?.let { raw ->
-                val embedUrl = fixEmbed(raw)
-                val embedReferer = proxyUrl  // Referer = página intermedia (clave)
-
-                val resolved = loadExtractor(
-                    url = embedUrl,
-                    referer = embedReferer,
-                    subtitleCallback = subtitleCallback,
-                    callback = callback
-                )
-                if (resolved) found = true
-            }
-        }
-
-        return@coroutineScope found
+        return@coroutineScope true
     }
 }
