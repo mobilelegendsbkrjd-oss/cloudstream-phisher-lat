@@ -117,10 +117,10 @@ class EnNovelas : MainAPI() {
                         ).ifEmpty { noEp.toString() }
 
                         val ep = newEpisode(epUrl) {
-                            name = "T$season - E$noEpisode - Cap" + 
+                            this.name = "T$season - E$noEpisode - Cap" + 
                                 (element.selectFirst("a .title")?.text()?.substringAfter("Cap") ?: "")
-                            episode = noEpisode.toIntOrNull() ?: noEp.toInt()
-                            season = season.toIntOrNull() ?: 1
+                            this.episode = noEpisode.toIntOrNull() ?: noEp.toInt()
+                            this.season = season.toIntOrNull() ?: 1
                         }
                         episodeList.add(ep)
                         noEp += 1
@@ -135,8 +135,8 @@ class EnNovelas : MainAPI() {
                 )
                 
                 val ep = newEpisode(epUrl) {
-                    name = "Cap" + (element.selectFirst("a .title")?.text()?.substringAfter("Cap") ?: "")
-                    episode = noEpisode.toIntOrNull() ?: 1
+                    this.name = "Cap" + (element.selectFirst("a .title")?.text()?.substringAfter("Cap") ?: "")
+                    this.episode = noEpisode.toIntOrNull() ?: 1
                 }
                 episodeList.add(ep)
             }
@@ -150,53 +150,56 @@ class EnNovelas : MainAPI() {
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
-    ): Boolean = coroutineScope {
-        try {
-            val doc = app.get(data).document
-            val form = doc.selectFirst("#btnServers form") ?: return@coroutineScope false
-            
-            val urlRequest = form.attr("action")
-            val watch = form.selectFirst("input")?.attr("value") ?: return@coroutineScope false
-            val domainUrl = urlRequest.substringBefore("/wp-content")
+    ): Boolean {
+        return coroutineScope {
+            try {
+                val doc = app.get(data).document
+                val form = doc.selectFirst("#btnServers form") ?: return@coroutineScope false
+                
+                val urlRequest = form.attr("action")
+                val watch = form.selectFirst("input")?.attr("value") ?: return@coroutineScope false
+                val domainUrl = urlRequest.substringBefore("/wp-content")
 
-            val body = mapOf(
-                "watch" to watch,
-                "submit" to ""
-            )
+                val body = mapOf(
+                    "watch" to watch,
+                    "submit" to ""
+                )
 
-            val headers = mapOf(
-                "authority" to domainUrl.replace("https://", ""),
-                "accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-                "accept-language" to "es-MX,es;q=0.9,en;q=0.8",
-                "content-type" to "application/x-www-form-urlencoded",
-                "origin" to mainUrl,
-                "referer" to "$mainUrl/",
-                "upgrade-insecure-requests" to "1"
-            )
+                val headers = mapOf(
+                    "authority" to domainUrl.replace("https://", ""),
+                    "accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                    "accept-language" to "es-MX,es;q=0.9,en;q=0.8",
+                    "content-type" to "application/x-www-form-urlencoded",
+                    "origin" to mainUrl,
+                    "referer" to "$mainUrl/",
+                    "upgrade-insecure-requests" to "1"
+                )
 
-            val postDoc = app.post(urlRequest, headers = headers, data = body).document
+                val postDoc = app.post(urlRequest, headers = headers, data = body).document
 
-            postDoc.select(".serversList li").forEach { element ->
-                async {
-                    try {
-                        val frameString = element.attr("abs:data-server")
-                        var link = frameString.substringAfter("src='").substringBefore("'")
-                            .replace("https://api.mycdn.moe/sblink.php?id=", "https://streamsb.net/e/")
-                            .replace("https://api.mycdn.moe/uqlink.php?id=", "https://uqload.co/embed-")
+                val jobs = postDoc.select(".serversList li").map { element ->
+                    async {
+                        try {
+                            val frameString = element.attr("abs:data-server")
+                            var link = frameString.substringAfter("src='").substringBefore("'")
+                                .replace("https://api.mycdn.moe/sblink.php?id=", "https://streamsb.net/e/")
+                                .replace("https://api.mycdn.moe/uqlink.php?id=", "https://uqload.co/embed-")
 
-                        if (link.contains("uqload") && !link.contains(".html")) {
-                            link = "$link.html"
-                        }
-                        
-                        loadExtractor(link, data, subtitleCallback, callback)
-                    } catch (_: Exception) {}
+                            if (link.contains("uqload") && !link.contains(".html")) {
+                                link = "$link.html"
+                            }
+                            
+                            loadExtractor(link, data, subtitleCallback, callback)
+                        } catch (_: Exception) {}
+                    }
                 }
-            }.awaitAll()
-        } catch (e: Exception) {
-            e.printStackTrace()
+                jobs.awaitAll()
+                true
+            } catch (e: Exception) {
+                e.printStackTrace()
+                false
+            }
         }
-        
-        return@coroutineScope true
     }
 
     private fun parseStatus(statusString: String): Int? {
