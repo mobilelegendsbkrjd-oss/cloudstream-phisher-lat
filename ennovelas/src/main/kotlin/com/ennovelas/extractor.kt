@@ -29,18 +29,20 @@ class PoiwExtractor : ExtractorApi() {
         servers?.forEach { (serverName, rawEmbed) ->
             val cleanUrl = fixEmbed(rawEmbed)
             
-            // Intentamos con extractores conocidos
+            // 1. Intentamos cargar extractores nativos primero
             val success = loadExtractor(cleanUrl, url, subtitleCallback, callback)
 
             if (!success) {
-                // Usamos la función recomendada newExtractorLink para evitar el error de compilación
+                // 2. Fallback: Si falla, creamos el link manualmente.
+                // Usamos la forma más compatible de ExtractorLink
                 callback(
-                    newExtractorLink(
-                        source = "ESP - $serverName",
+                    ExtractorLink(
+                        source = "ESP - $serverName", 
                         name = serverName,
                         url = cleanUrl,
-                        referer = url,
-                        quality = Qualities.Unknown.value
+                        referer = url, // Aquí el referer es la URL de poiw
+                        quality = Qualities.Unknown.value,
+                        isM3u8 = cleanUrl.contains(".m3u8")
                     )
                 )
             }
