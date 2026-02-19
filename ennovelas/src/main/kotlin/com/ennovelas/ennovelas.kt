@@ -109,7 +109,6 @@ class EnNovelas : MainAPI() {
     ): Boolean = coroutineScope {
         val doc: Document = app.get(data).document
 
-        // Buscar enlace pooiw (proxy de los servers)
         var pooiwUrl: String? = doc.selectFirst("a[href*='a.poiw.online/enn.php?post=']")?.attr("href")
 
         if (pooiwUrl == null) {
@@ -120,10 +119,8 @@ class EnNovelas : MainAPI() {
 
         if (pooiwUrl.isNullOrBlank()) return@coroutineScope false
 
-        // Extraer base64 después de post=
         val base64Part = pooiwUrl.substringAfter("post=").substringBefore("&").trim()
 
-        // Decodificar base64 y parsear JSON
         val servers: Map<String, String>? = try {
             val decodedBytes = Base64.getDecoder().decode(base64Part)
             val jsonStr = String(decodedBytes, Charsets.UTF_8)
@@ -134,7 +131,6 @@ class EnNovelas : MainAPI() {
 
         if (servers.isNullOrEmpty()) return@coroutineScope false
 
-        // Enviar cada server como ExtractorLink
         servers.forEach { (serverName, embedUrl) ->
             val cleanUrl = embedUrl.replace("\\/", "/")
 
@@ -145,19 +141,16 @@ class EnNovelas : MainAPI() {
                 else -> serverName.uppercase()
             }
 
-            val link = ExtractorLink(
-                source = serverDisplayName,
-                name = "$serverDisplayName - $serverName",
-                url = cleanUrl,
-                referer = data,
-                quality = Qualities.Unknown.value
-            ).apply {
-                // Headers extras para evitar bloqueos en algunos extractors
-                this.headers["Referer"] = "https://l.ennovelas-tv.com/"
-                // Opcional: this.isM3u8 = cleanUrl.endsWith(".m3u8") || cleanUrl.contains("master.m3u8")
-            }
-
-            callback(link)
+            callback.invoke(
+                newExtractorLink(
+                    source = serverDisplayName,
+                    name = "$serverDisplayName - $serverName",
+                    url = cleanUrl,
+                    referer = data,
+                    quality = Qualities.Unknown.value,
+                    headers = mapOf("Referer" to "https://l.ennovelas-tv.com/")
+                )
+            )
         }
 
         return@coroutineScope true
