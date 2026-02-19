@@ -109,20 +109,21 @@ class EnNovelas : MainAPI() {
     ): Boolean = coroutineScope {
         val doc: Document = app.get(data).document
 
-        // 1. Buscar el enlace al proxy pooiw
-        var pooiwUrl: String? = doc.selectFirst("a[href*='a.poiw.online/enn.php?post=']")?.attr("href")
+        // Buscar botón "Ver Capítulo" → redirección al blog/proxy
+        var proxyUrl: String? = doc.selectFirst("a[href*='a.poiw.online/enn.php?post=']")?.attr("href")
 
-        if (pooiwUrl == null) {
+        if (proxyUrl == null) {
             val regexMatch = Regex("""https?://a\.poiw\.online/enn\.php\?post=([A-Za-z0-9+/=]+)""")
                 .find(doc.outerHtml())
-            pooiwUrl = regexMatch?.value
+            proxyUrl = regexMatch?.value
         }
 
-        if (pooiwUrl.isNullOrBlank()) return@coroutineScope false
+        if (proxyUrl.isNullOrBlank()) return@coroutineScope false
 
-        // 2. Extraer y decodificar base64
-        val base64Part = pooiwUrl.substringAfter("post=").substringBefore("&").trim()
+        // Extraer base64 del post=
+        val base64Part = proxyUrl.substringAfter("post=").substringBefore("&").trim()
 
+        // Decodificar y parsear JSON
         val servers: Map<String, String>? = try {
             val decodedBytes = Base64.getDecoder().decode(base64Part)
             val jsonStr = String(decodedBytes, Charsets.UTF_8)
@@ -133,35 +134,42 @@ class EnNovelas : MainAPI() {
 
         if (servers.isNullOrEmpty()) return@coroutineScope false
 
-        // 3. Procesar cada servidor
+        // Limpieza de URLs (sustituciones como en Cuevana)
+        fun fixEmbed(url: String): String = url.replace("\\/", "/")
+            .replace("uqload.net", "uqload.to")
+            .replace("uqload.com", "uqload.to")
+            .replace("vidspeeds.com", "vidsspeeds.com")
+            .replace("vidhidepremium.com", "vidhidepro.com")
+            .replace("vidhide.com", "vidhidepro.com")
+
         var foundAny = false
 
-        servers.forEach { (serverName, embedUrl) ->
-            val cleanUrl = embedUrl.replace("\\/", "/")
+        servers.forEach { (serverName, rawEmbed) ->
+            val embedUrl = fixEmbed(rawEmbed)
 
-            val serverDisplayName = when (serverName.lowercase()) {
+            val displayName = when (serverName.lowercase()) {
                 "vk" -> "VK.com"
                 "vidsspeeds", "vidspeeds" -> "Vidspeeds"
                 "uqload" -> "Uqload"
                 else -> serverName.uppercase()
             }
 
-            // 4. Intentar resolver con extractors internos de CloudStream
-            val loaded = loadExtractor(
-                url = cleanUrl,
-                referer = data,               // muy importante: referer = página del capítulo
+            // Resolver el embed con extractors internos de CloudStream
+            val resolved = loadExtractor(
+                url = embedUrl,
+                referer = data,  // Referer = página del capítulo
                 subtitleCallback = subtitleCallback,
                 callback = callback
             )
 
-            if (loaded) foundAny = true
+            if (resolved) foundAny = true
 
-            // 5. Fallback: enviar el embed directo si no resuelve (por si acaso)
-            if (!loaded) {
+            // Fallback: enviar el embed directo si no se resuelve automáticamente
+            if (!resolved) {
                 val link = newExtractorLink(
-                    source = serverDisplayName,
-                    name = "$serverDisplayName - $serverName (directo)",
-                    url = cleanUrl
+                    source = displayName,
+                    name = "$displayName - $serverName (directo)",
+                    url = embedUrl
                 )
                 link.referer = data
                 link.quality = Qualities.Unknown.value
