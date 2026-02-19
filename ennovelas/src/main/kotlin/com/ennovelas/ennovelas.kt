@@ -3,8 +3,9 @@ package com.ennovelas
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.coroutineScope
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.decodeFromString
 import org.jsoup.nodes.Document
-import org.jsoup.nodes.Element
 import java.util.Base64
 
 class EnNovelas : MainAPI() {
@@ -25,10 +26,6 @@ class EnNovelas : MainAPI() {
         "$mainUrl/movies" to "Películas"
     )
 
-    // ────────────────────────────────────────────────
-    // getMainPage, search y load → se mantienen casi iguales (solo pequeños fixes)
-    // ────────────────────────────────────────────────
-
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
         val url = when (request.name) {
             "Últimos Capítulos" -> "$mainUrl/episodes"
@@ -43,7 +40,6 @@ class EnNovelas : MainAPI() {
             val title = element.selectFirst(".title")?.text()?.trim() ?: ""
             var img = element.selectFirst("img")?.let { it.attr("data-img").ifEmpty { it.attr("src") } } ?: ""
 
-            // Fix para imágenes lazy con background
             if (img.contains("grey.gif") || img.isEmpty()) {
                 element.selectFirst(".imgSer")?.attr("data-img")?.let { bg ->
                     img = bg.substringAfter("url(").substringBefore(")")
@@ -55,7 +51,7 @@ class EnNovelas : MainAPI() {
             }
         }
 
-        return HomePageResponse(listOf(HomePageList(request.name, items)))
+        return newHomePageResponse(listOf(HomePageList(request.name, items)))
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -89,7 +85,6 @@ class EnNovelas : MainAPI() {
             }
         }
 
-        // Series: episodios en .eplist > a.epNum
         val episodes = doc.select("ul.eplist a.epNum").mapIndexed { idx, a ->
             val epUrl = a.attr("href").let { if (it.startsWith("/")) mainUrl + it else it }
             val epName = a.selectFirst("span")?.text()?.trim() ?: "Episodio ${idx + 1}"
@@ -106,10 +101,6 @@ class EnNovelas : MainAPI() {
         }
     }
 
-    // ────────────────────────────────────────────────
-    // loadLinks → AQUÍ ESTÁ LA MAGIA (decodificar el post= base64)
-    // ────────────────────────────────────────────────
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -118,10 +109,9 @@ class EnNovelas : MainAPI() {
     ): Boolean = coroutineScope {
         val doc: Document = app.get(data).document
 
-        // 1. Buscar el enlace del proxy pooiw
+        // Buscar enlace pooiw
         var pooiwUrl: String? = doc.selectFirst("a[href*='a.poiw.online/enn.php?post=']")?.attr("href")
 
-        // Si no aparece en <a>, buscar en todo el HTML (a veces está en texto o script)
         if (pooiwUrl == null) {
             val regexMatch = Regex("""https?://a\.poiw\.online/enn\.php\?post=([A-Za-z0-9+/=]+)""")
                 .find(doc.outerHtml())
@@ -130,26 +120,23 @@ class EnNovelas : MainAPI() {
 
         if (pooiwUrl.isNullOrBlank()) return@coroutineScope false
 
-        // 2. Extraer la parte base64 después de post=
+        // Extraer base64
         val base64Part = pooiwUrl.substringAfter("post=").substringBefore("&").trim()
 
-        // 3. Decodificar base64 → JSON
+        // Decodificar y parsear JSON
         val servers: Map<String, String>? = try {
             val decodedBytes = Base64.getDecoder().decode(base64Part)
             val jsonStr = String(decodedBytes, Charsets.UTF_8)
-            json.decodeFromString<Map<String, String>>(jsonStr)
+            Json.decodeFromString<Map<String, String>>(jsonStr)
         } catch (e: Exception) {
             null
         }
 
         if (servers.isNullOrEmpty()) return@coroutineScope false
 
-        // 4. Cargar cada servidor como extractor link
         servers.forEach { (serverName, embedUrl) ->
-            // Limpiar posibles escapes en la URL
             val cleanUrl = embedUrl.replace("\\/", "/")
 
-            // Puedes priorizar o renombrar servers si quieres
             val name = when (serverName.lowercase()) {
                 "vk" -> "VK.com"
                 "vidsspeeds", "vidspeeds" -> "Vidspeeds"
@@ -157,15 +144,13 @@ class EnNovelas : MainAPI() {
                 else -> serverName.uppercase()
             }
 
-            // Enviar al extractor (CloudStream intentará resolverlo automáticamente)
             callback(
-                ExtractorLink(
+                newExtractorLink(
                     source = name,
                     name = "$name - $serverName",
                     url = cleanUrl,
                     referer = data,
                     quality = Qualities.Unknown.value,
-                    isM3u8 = cleanUrl.contains(".m3u8") || cleanUrl.contains("master.m3u8"),
                     headers = mapOf("Referer" to "https://l.ennovelas-tv.com/")
                 )
             )
