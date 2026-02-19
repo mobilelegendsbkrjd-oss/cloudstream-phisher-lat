@@ -141,16 +141,22 @@ class EnNovelas : MainAPI() {
                 else -> serverName.uppercase()
             }
 
-            callback.invoke(
-                newExtractorLink(
-                    source = serverDisplayName,
-                    name = "$serverDisplayName - $serverName",
-                    url = cleanUrl,
-                    referer = data,
-                    quality = Qualities.Unknown.value,
-                    headers = mapOf("Referer" to "https://l.ennovelas-tv.com/")
-                )
+            // Creamos el link básico con newExtractorLink
+            val baseLink = newExtractorLink(
+                source = serverDisplayName,
+                name = "$serverDisplayName - $serverName",
+                url = cleanUrl
             )
+
+            // Aplicamos las propiedades adicionales con .apply
+            val finalLink = baseLink.copy(
+                referer = data,
+                quality = Qualities.Unknown.value
+            ).apply {
+                headers["Referer"] = "https://l.ennovelas-tv.com/"
+            }
+
+            callback(finalLink)
         }
 
         return@coroutineScope true
