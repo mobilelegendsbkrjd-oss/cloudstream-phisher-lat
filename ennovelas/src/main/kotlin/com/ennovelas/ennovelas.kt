@@ -3,10 +3,6 @@ package com.ennovelas
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.coroutineScope
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.decodeFromString
-import org.jsoup.nodes.Document
-import java.util.Base64
 
 class EnNovelas : MainAPI() {
     override var mainUrl = "https://l.ennovelas-tv.com"
@@ -20,7 +16,8 @@ class EnNovelas : MainAPI() {
         TvType.Movie
     )
 
-    override val headers = mapOf(
+    // Eliminamos el 'override' de headers para evitar el error de compilación
+    val commonHeaders = mapOf(
         "User-Agent" to USER_AGENT,
         "Accept-Language" to "es-ES,es;q=0.9"
     )
@@ -43,9 +40,7 @@ class EnNovelas : MainAPI() {
                 posterUrl = fixUrlNull(img)
             }
         }
-        return newHomePageResponse(
-            listOf(HomePageList(request.name, items))
-        )
+        return newHomePageResponse(listOf(HomePageList(request.name, items)))
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
@@ -54,8 +49,7 @@ class EnNovelas : MainAPI() {
             val href = element.selectFirst("a")?.attr("href") ?: return@mapNotNull null
             val title = element.selectFirst(".title")?.text()?.trim() ?: return@mapNotNull null
             val img = element.selectFirst("img")?.attr("data-img")
-                ?.ifEmpty { element.selectFirst("img")?.attr("src") }
-                ?: ""
+                ?.ifEmpty { element.selectFirst("img")?.attr("src") } ?: ""
             newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
                 posterUrl = fixUrlNull(img)
             }
@@ -67,9 +61,8 @@ class EnNovelas : MainAPI() {
         val title = doc.selectFirst("h1")?.ownText()?.trim() ?: return null
         val description = doc.selectFirst(".postDesc, .post-entry, .story")?.text()?.trim() ?: ""
         val poster = doc.selectFirst("img.imgLoaded, img[alt*='poster'], .poster img")
-            ?.attr("data-img")
-            ?.ifEmpty { doc.selectFirst("img")?.attr("src") }
-            ?: ""
+            ?.attr("data-img")?.ifEmpty { doc.selectFirst("img")?.attr("src") } ?: ""
+        
         val isMovie = url.contains("/movies/") || url.contains("/pelicula/")
         if (isMovie) {
             return newMovieLoadResponse(title, url, TvType.Movie, url) {
@@ -79,8 +72,7 @@ class EnNovelas : MainAPI() {
         }
         val episodes = doc.select("ul.eplist a.epNum").mapIndexed { index, a ->
             val epUrl = fixUrl(a.attr("href"))
-            val epName = a.selectFirst("span")?.text()?.trim()
-                ?: "Episodio ${index + 1}"
+            val epName = a.selectFirst("span")?.text()?.trim() ?: "Episodio ${index + 1}"
             newEpisode(epUrl) {
                 name = epName
                 episode = index + 1
@@ -99,16 +91,12 @@ class EnNovelas : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean = coroutineScope {
-        val doc = app.get(data).document
-
-       
-        val proxyUrl = doc.selectFirst("a[href*='a.poiw.online/enn.php?post=']")?.attr("href")
+        val episodeDoc = app.get(data, headers = commonHeaders).document
+        val proxyUrl = episodeDoc.selectFirst("a[href*='a.poiw.online/enn.php?post=']")?.attr("href")
             ?: return@coroutineScope false
 
-        
-        val extractor = PoiwExtractor()
-        extractor.getUrl(proxyUrl, data, subtitleCallback, callback)
-
+        // Llamamos a nuestro extractor personalizado
+        PoiwExtractor().getUrl(proxyUrl, data, subtitleCallback, callback)
         return@coroutineScope true
     }
 }

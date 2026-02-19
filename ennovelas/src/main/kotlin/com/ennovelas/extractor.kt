@@ -1,10 +1,7 @@
 package com.ennovelas
 
 import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.utils.ExtractorApi
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.*
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.decodeFromString
 import android.util.Base64
@@ -20,40 +17,25 @@ class PoiwExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // 1. Extraer el Base64 del parámetro 'post'
         val base64Data = url.substringAfter("post=").substringBefore("&")
-        
-        // 2. Decodificar el JSON de servidores
         val jsonStr = try {
-            val decodedBytes = Base64.decode(base64Data, Base64.DEFAULT)
-            String(decodedBytes, Charsets.UTF_8)
-        } catch (e: Exception) {
-            return 
-        }
+            String(Base64.decode(base64Data, Base64.DEFAULT), Charsets.UTF_8)
+        } catch (e: Exception) { return }
 
         val servers = try {
             Json.decodeFromString<Map<String, String>>(jsonStr)
-        } catch (e: Exception) {
-            null
-        }
+        } catch (e: Exception) { null }
 
-        // 3. Procesar cada servidor encontrado en el JSON
         servers?.forEach { (serverName, rawEmbed) ->
             val cleanUrl = fixEmbed(rawEmbed)
             
-            // Intentamos cargar el extractor nativo de CloudStream para ese servidor
-            // Usamos la URL del proxy como referer para engañar al servidor de video
-            val success = loadExtractor(
-                url = cleanUrl,
-                referer = url, 
-                subtitleCallback = subtitleCallback,
-                callback = callback
-            )
+            // Intentamos con extractores conocidos
+            val success = loadExtractor(cleanUrl, url, subtitleCallback, callback)
 
-            // Fallback: Si no hay extractor nativo, enviamos el link directo
             if (!success) {
+                // Usamos la función recomendada newExtractorLink para evitar el error de compilación
                 callback(
-                    ExtractorLink(
+                    newExtractorLink(
                         source = "ESP - $serverName",
                         name = serverName,
                         url = cleanUrl,
