@@ -147,12 +147,9 @@ class EnNovelas : MainAPI() {
                 url = cleanUrl
             )
 
-            // Propiedades adicionales sin mutar directamente
+            // Solo propiedades seguras (sin headers ni nada mutable)
             link.referer = data
             link.quality = Qualities.Unknown.value
-
-            // Headers (si la versión lo permite como mutable)
-            link.headers["Referer"] = "https://l.ennovelas-tv.com/"
 
             callback(link)
         }
