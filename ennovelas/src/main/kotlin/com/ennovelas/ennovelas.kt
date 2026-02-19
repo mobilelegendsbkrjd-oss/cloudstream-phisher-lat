@@ -2,9 +2,6 @@ package com.ennovelas
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
@@ -35,40 +32,47 @@ class EnNovelas : MainAPI() {
         }
         
         val doc = app.get(url).document
-        val items = doc.select(".block-post").mapNotNull { element ->
-            val href = element.select("a").attr("href")
-            val title = element.select(".title").text()
-            val imgElement = element.select("img").first()
-            var img = imgElement?.attr("data-img") ?: imgElement?.attr("src") ?: ""
-            
-            if (img.contains("grey.gif") && element.select(".imgSer").isNotEmpty()) {
-                val bgImg = element.select(".imgSer").attr("data-img")
-                if (bgImg.isNotEmpty()) {
-                    img = bgImg.replace("background-image:url(", "").replace(");", "")
-                }
-            }
-            
-            newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
-                this.posterUrl = fixUrlNull(img)
-            }
+        val items = doc.select("#load-post article .block-post, .block-post").mapNotNull { element ->
+            elementToSearchResponse(element)
         }
         
         return newHomePageResponse(listOf(HomePageList(request.name, items)))
     }
 
-    override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/?s=$query"
-        val doc = app.get(url).document
-        return doc.select(".block-post").mapNotNull { element ->
-            val href = element.select("a").attr("href")
-            val title = element.select(".title").text()
-            val img = element.select("img").attr("data-img").ifEmpty { 
-                element.select("img").attr("src") 
+    private fun elementToSearchResponse(element: Element): SearchResponse? {
+        val link = element.select("a").attr("href").takeIf { it.isNotBlank() } ?: return null
+        val title = element.select(".title").text().takeIf { it.isNotBlank() } 
+            ?: element.select("a").attr("title") ?: return null
+        
+        var img = element.select("img").attr("data-img")
+        if (img.isBlank()) {
+            img = element.select("img").attr("src")
+        }
+        if (img.isBlank()) {
+            val imgSer = element.select(".imgSer").attr("data-img")
+            if (imgSer.isNotBlank()) {
+                img = imgSer.replace("background-image:url(", "").replace(");", "")
             }
-            
-            newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+        }
+        
+        val type = if (link.contains("/movies/") || link.contains("/pelicula/")) 
+            TvType.Movie else TvType.TvSeries
+
+        return when (type) {
+            TvType.Movie -> newMovieSearchResponse(title, link, TvType.Movie) {
                 this.posterUrl = fixUrlNull(img)
             }
+            else -> newTvSeriesSearchResponse(title, link, TvType.TvSeries) {
+                this.posterUrl = fixUrlNull(img)
+            }
+        }
+    }
+
+    override suspend fun search(query: String): List<SearchResponse> {
+        val searchUrl = "$mainUrl/?s=$query"
+        val doc = app.get(searchUrl).document
+        return doc.select(".block-post").mapNotNull { element ->
+            elementToSearchResponse(element)
         }
     }
 
@@ -76,20 +80,21 @@ class EnNovelas : MainAPI() {
         val doc = app.get(url).document
         
         val title = doc.selectFirst("h1")?.text() ?: ""
-        val description = doc.selectFirst(".postDesc .post-entry div")?.text() ?: ""
-        val poster = doc.selectFirst("img.imgLoaded")?.attr("data-img") ?: 
-                    doc.selectFirst("img")?.attr("src") ?: ""
+        val description = doc.selectFirst(".postDesc")?.text() ?: ""
+        val poster = doc.selectFirst(".poster img")?.attr("src") ?: ""
+        val year = doc.select("ul.postlist li .getMeta a[href*='/years/']").text()
+            .filter { it.isDigit() }.toIntOrNull()
         
         val type = if (url.contains("/movies/") || url.contains("/pelicula/")) 
             TvType.Movie else TvType.TvSeries
 
         val episodes = if (type == TvType.TvSeries) {
-            doc.select(".block-post").mapIndexed { index, element ->
-                val epUrl = element.select("a").attr("href")
-                val epTitle = element.select(".title").text()
+            doc.select("ul.eplist a.epNum").map { element ->
+                val epUrl = element.attr("href")
+                val epNum = element.select("span").text().toIntOrNull() ?: 1
                 newEpisode(epUrl) {
-                    name = epTitle
-                    episode = index + 1
+                    name = "Episodio $epNum"
+                    episode = epNum
                     season = 1
                 }
             }
@@ -99,10 +104,12 @@ class EnNovelas : MainAPI() {
             TvType.Movie -> newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = fixUrlNull(poster)
                 this.plot = description
+                this.year = year
             }
             else -> newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = fixUrlNull(poster)
                 this.plot = description
+                this.year = year
             }
         }
     }
@@ -114,10 +121,26 @@ class EnNovelas : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val doc = app.get(data).document
-        val iframe = doc.selectFirst("iframe")?.attr("src") ?: return false
         
-        loadExtractor(iframe, data, subtitleCallback, callback)
-        return true
+        // Buscar el embed URL en los meta tags
+        val embedUrl = doc.select("meta[property='og:video:url']").attr("content")
+            .ifEmpty { doc.select("meta[property='og:video:secure_url']").attr("content") }
+            .ifEmpty { doc.select("link[itemprop='embedURL']").attr("href") }
+        
+        if (embedUrl.isNotBlank()) {
+            // Cargar el embed URL directamente
+            loadExtractor(embedUrl, data, subtitleCallback, callback)
+            return true
+        }
+        
+        // Si no hay meta tags, buscar iframe
+        val iframe = doc.selectFirst("iframe")?.attr("src")
+        if (!iframe.isNullOrBlank()) {
+            loadExtractor(iframe, data, subtitleCallback, callback)
+            return true
+        }
+        
+        return false
     }
 
     companion object {
