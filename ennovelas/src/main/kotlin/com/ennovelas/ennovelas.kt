@@ -21,9 +21,9 @@ class EnNovelas : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "$mainUrl/episodes" to "Últimos Capítulos",
+       
         "$mainUrl/series" to "Series",
-        "$mainUrl/movies" to "Películas"
+        
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
@@ -154,3 +154,4 @@ class EnNovelas : MainAPI() {
         return@coroutineScope found
     }
 }
+
