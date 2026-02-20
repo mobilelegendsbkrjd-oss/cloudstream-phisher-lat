@@ -1,22 +1,18 @@
 package com.tlnovelas
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.extractors.*
+import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.loadExtractor
 import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.google.gson.annotations.SerializedName
-import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URLDecoder
-import java.util.*
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-// -----------------------------------------------------
-// Universal Embed Extractor (soporta bysejikuar, luluvdo, etc.)
-// -----------------------------------------------------
 open class UniversalEmbedExtractor : ExtractorApi() {
     override val name = "Universal Tlnovelas Embed"
     override val mainUrl = "https://ww2.tlnovelas.net"
@@ -34,17 +30,17 @@ open class UniversalEmbedExtractor : ExtractorApi() {
             url.contains("bysejikuar.com") || url.contains("bf0skv.org") || url.contains("filemoon.site") -> {
                 extractBysejikuar(url, referer, subtitleCallback, callback)
             }
-            url.contains("dooodster.com") || url.contains("dood") -> {
-                loadExtractor(url, referer ?: "", subtitleCallback, callback)
+            url.contains("dooodster.com") -> {
+                loadExtractor(url, referer, subtitleCallback, callback)
             }
             url.contains("iplayerhls.com") -> {
-                loadExtractor(url, referer ?: "", subtitleCallback, callback)
+                loadExtractor(url, referer, subtitleCallback, callback)
             }
             url.contains("luluvdo.com") || url.contains("luluvdoo.com") || url.contains("luluvid.com") -> {
                 extractLuluvdo(url, referer, subtitleCallback, callback)
             }
             else -> {
-                loadExtractor(url, referer ?: "", subtitleCallback, callback)
+                loadExtractor(url, referer, subtitleCallback, callback)
             }
         }
     }
@@ -61,63 +57,47 @@ open class UniversalEmbedExtractor : ExtractorApi() {
         val currentDomain = Regex("""(https?://[^/]+)""").find(link)?.groupValues?.get(1) ?: return
 
         val detailsUrl = "$currentDomain/api/videos/$videoId/embed/details"
-        val detailsHeaders = mapOf(
-            "User-Agent" to USER_AGENT,
-            "Accept" to "application/json",
-            "X-Embed-Origin" to "ww2.tlnovelas.net",
-            "X-Embed-Referer" to (referer ?: "https://ww2.tlnovelas.net/")
-        )
-        val detailsResponse = app.get(detailsUrl, headers = detailsHeaders).text
-        val details = gson.fromJson(detailsResponse, DetailsResponse::class.java)
+        val details = app.get(detailsUrl).text
+        val detailsObj = gson.fromJson(details, DetailsResponse::class.java)
+        val embedFrameUrl = detailsObj.embed_frame_url ?: return
 
-        val embedFrameUrl = details.embed_frame_url ?: return
-
-        val headers = mutableMapOf(
+        val headers = mutableMapOf<String, String>(
             "User-Agent" to USER_AGENT,
             "Accept" to "application/json"
         )
 
-        val playbackDomain = if (linkType == "d") {
+        val playbackDomain: String = if (linkType == "d") {
             headers["Referer"] = link
             currentDomain
         } else {
             val domain = Regex("""(https?://[^/]+)""").find(embedFrameUrl)?.groupValues?.get(1) ?: return
             headers["Referer"] = embedFrameUrl
             headers["X-Embed-Parent"] = link
-            headers["X-Embed-Origin"] = "ww2.tlnovelas.net"
-            headers["X-Embed-Referer"] = referer ?: "https://ww2.tlnovelas.net/"
             domain
         }
 
         val playbackUrl = "$playbackDomain/api/videos/$videoId/embed/playback"
-        val playbackResponse = app.get(playbackUrl, headers = headers).text
-        val playback = gson.fromJson(playbackResponse, PlaybackResponse::class.java).playback ?: return
+        val playback = app.get(playbackUrl, headers = headers).text
+        val playbackObj = gson.fromJson(playback, PlaybackResponse::class.java)
+        val playbackData = playbackObj.playback ?: return
 
-        val decryptedJson = decryptPlayback(playback)
+        val decryptedJson = decryptPlayback(playbackData)
         val decrypted = gson.fromJson(decryptedJson, DecryptedPlayback::class.java) ?: return
 
         val sources = decrypted.sources ?: return
         if (sources.isEmpty()) return
-
         val sourceUrl = sources[0].url ?: return
 
-        callback.invoke(
+        callback(
             ExtractorLink(
-                source = this.name,
-                name = "Bysejikuar HLS",
-                url = sourceUrl,
-                referer = "$playbackDomain/",
-                quality = Qualities.Unknown.value,
-                isM3u8 = sourceUrl.endsWith(".m3u8") || sourceUrl.contains(".m3u8?")
+                this.name,
+                "Bysejikuar",
+                sourceUrl,
+                "$playbackDomain/",
+                Qualities.Unknown.value,
+                sourceUrl.contains(".m3u8")
             )
         )
-
-        decrypted.tracks?.forEach { trackElem ->
-            val track = trackElem.asJsonObject
-            val subUrl = track.get("file")?.asString ?: return@forEach
-            val subLabel = track.get("label")?.asString ?: "Unknown"
-            subtitleCallback(SubtitleFile(subUrl, subLabel))
-        }
     }
 
     private fun padBase64(s: String): String {
@@ -129,16 +109,17 @@ open class UniversalEmbedExtractor : ExtractorApi() {
         val decoder = Base64.getUrlDecoder()
         val iv = decoder.decode(padBase64(data.iv))
         val payload = decoder.decode(padBase64(data.payload))
-        if (data.key_parts.size < 2) return ""
         val p1 = decoder.decode(padBase64(data.key_parts[0]))
         val p2 = decoder.decode(padBase64(data.key_parts[1]))
-        val key = p1 + p2
+        val key = ByteArray(p1.size + p2.size)
+        System.arraycopy(p1, 0, key, 0, p1.size)
+        System.arraycopy(p2, 0, key, p1.size, p2.size)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         val spec = GCMParameterSpec(128, iv)
         val secretKey = SecretKeySpec(key, "AES")
         cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
         val decryptedBytes = cipher.doFinal(payload)
-        return String(decryptedBytes, Charsets.UTF_8)
+        return decryptedBytes.toString(Charsets.UTF_8)
     }
 
     private suspend fun extractLuluvdo(
@@ -147,34 +128,33 @@ open class UniversalEmbedExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val doc = app.get(link, referer = referer ?: "").document
-        val scriptData = doc.selectFirst("script:containsData(sources:)")?.data() ?: return
+        val response = app.get(link).text
+        val source = Regex("sources: \\[\\{file:\"(.*?)\"\\}").find(response)
+            ?.groupValues?.get(1)
+            ?: return
 
-        val sourceMatch = Regex("sources: \\[\\{file:\"(.*?)\"\\}]").find(scriptData)
-        val source = sourceMatch?.groupValues?.get(1) ?: return
-
-        callback.invoke(
+        callback(
             ExtractorLink(
-                source = this.name,
-                name = "LuluVdo",
-                url = source,
-                referer = referer ?: link,
-                quality = Qualities.Unknown.value,
-                isM3u8 = source.endsWith(".m3u8") || source.contains(".m3u8?")
+                this.name,
+                "LuluVdo",
+                source,
+                link,
+                Qualities.Unknown.value,
+                source.contains(".m3u8")
             )
         )
 
-        val tracksData = Regex("tracks: \\[(.*?)]").find(scriptData)?.groupValues?.get(1) ?: ""
-        Regex("file: \"(.*?)\", label: \"(.*?)\"").findAll(tracksData).forEach {
+        val tracks = Regex("tracks: \\[(.*?)]").find(response)?.groupValues?.get(1) ?: ""
+        Regex("file: \"(.*?)\", label: \"(.*?)\"").findAll(tracks).forEach {
             val subFile = it.groupValues[1]
             val subLabel = it.groupValues[2]
             if (subLabel != "Upload captions") {
-                subtitleCallback(SubtitleFile(subFile, subLabel))
+                subtitleCallback(SubtitleFile(subLabel, subFile))
             }
         }
     }
 
-    // Modelos para bysejikuar
+    // API models
     data class DetailsResponse(val embed_frame_url: String?)
     data class PlaybackResponse(val playback: PlaybackData?)
     data class PlaybackData(
@@ -182,110 +162,111 @@ open class UniversalEmbedExtractor : ExtractorApi() {
         val payload: String,
         val key_parts: List<String>
     )
+    // Decrypted JSON model
     data class DecryptedPlayback(
         val sources: List<DecryptedSource>?,
-        val tracks: List<JsonElement>? = null
+        val tracks: List<JsonElement>? = null,
+        @SerializedName("poster_url") val posterUrl: String? = null,
+        @SerializedName("generated_at") val generatedAt: String? = null,
+        @SerializedName("expires_at") val expiresAt: String? = null
     )
     data class DecryptedSource(
-        val url: String?
+        val quality: String? = null,
+        val label: String? = null,
+        @SerializedName("mime_type") val mimeType: String? = null,
+        val url: String? = null,
+        @SerializedName("bitrate_kbps") val bitrateKbps: Int? = null,
+        val height: Int? = null,
+        @SerializedName("size_bytes") val sizeBytes: Long? = null
     )
 }
 
-// -----------------------------------------------------
-// CLASE PRINCIPAL
-// -----------------------------------------------------
 class Tlnovelas : MainAPI() {
-
     override var mainUrl = "https://ww2.tlnovelas.net"
     override var name = "Tlnovelas"
     override val hasMainPage = true
     override var lang = "es"
     override val hasQuickSearch = true
     override val supportedTypes = setOf(TvType.TvSeries)
-
     override val mainPage = mainPageOf(
         "" to "Últimos Capítulos",
         "gratis/telenovelas/" to "Ver Telenovelas"
     )
-
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+    override suspend fun getMainPage(
+        page: Int,
+        request: MainPageRequest
+    ): HomePageResponse {
         val url = if (page <= 1) "$mainUrl/${request.data}" else "$mainUrl/${request.data}/page/$page"
         val document = app.get(url).document
         val home = document.select(".vk-poster, .ani-card, .p-content, .ani-txt")
             .mapNotNull { it.toSearchResult() }
             .distinctBy { it.url }
-        return HomePageResponse(home, hasNext = true)
+        return newHomePageResponse(request.name, home, true)
     }
-
-    private fun Element.toSearchResult(): SearchResponse? {
+    private fun Element.toSearchResult(): SearchResponse {
         val title = selectFirst(".ani-txt, .p-title, .vk-info p")?.text()
-            ?: selectFirst("a")?.attr("title") ?: return null
-        var href = selectFirst("a")?.attr("href") ?: return null
+                ?: selectFirst("a")?.attr("title") ?: ""
+        var href = selectFirst("a")?.attr("href") ?: ""
         val poster = selectFirst("img")?.attr("src")
-
         if (href.contains("/ver/")) {
             val slug = href.removeSuffix("/").substringAfterLast("/")
                 .replace(Regex("(?i)-capitulo-\\d+|-capítulo-\\d+"), "")
             href = "$mainUrl/novela/$slug/"
         }
-
         return newTvSeriesSearchResponse(title, fixUrl(href), TvType.TvSeries) {
-            this.posterUrl = poster
+            posterUrl = poster
         }
     }
-
     override suspend fun search(query: String): List<SearchResponse> {
         val url = "$mainUrl/buscar/?q=$query"
         return app.get(url).document.select(".vk-poster, .ani-card")
             .mapNotNull { it.toSearchResult() }
             .distinctBy { it.url }
     }
-
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
         val novelaLink = document.selectFirst("a[href*='/novela/']")?.attr("href")
         val finalDoc = if (url.contains("/ver/") && novelaLink != null) app.get(novelaLink).document else document
-
         val title = finalDoc.selectFirst("h1.card-title, .vk-title-main, h1")?.text()
             ?.replace(Regex("(?i)Capitulos de|Ver"), "")?.trim() ?: "Telenovela"
-
         val poster = finalDoc.selectFirst("meta[property='og:image']")?.attr("content")
             ?: finalDoc.selectFirst(".ani-img img")?.attr("src")
-
         val episodes = finalDoc.select("a[href*='/ver/']").map {
             val epUrl = it.attr("href")
             val epName = it.text().replace(title, "", true)
                 .replace(Regex("(?i)Ver|Capitulo|Capítulo"), "").trim()
-
-            newEpisode(epUrl) {
-                name = if (epName.isEmpty()) "Capítulo" else "Capítulo $epName"
-            }
+            newEpisode(epUrl) { name = if (epName.isEmpty()) "Capítulo" else "Capítulo $epName" }
         }.distinctBy { it.data }.reversed()
-
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-            this.posterUrl = poster
-            this.plot = finalDoc.selectFirst(".card-text, .ani-description")?.text()
+            posterUrl = poster
+            plot = finalDoc.selectFirst(".card-text, .ani-description")?.text()
         }
     }
-
     private fun decodeVideoUrl(encoded: String): String {
         return try {
+            // Decodificar la cadena ofuscada
             val parts = encoded.split("|")
             if (parts.size == 2) {
                 val encodedStr = parts[0]
-                val key = parts[1].toIntOrNull() ?: 0
-                val decodedChars = StringBuilder()
+                val key = parts[1].toInt()
+               
+                // Descifrado simple (basado en el patrón común de estos sitios)
+                val decodedChars = mutableListOf<Char>()
                 for (i in encodedStr.indices) {
                     val charCode = encodedStr[i].code - key - i
-                    decodedChars.append(charCode.toChar())
+                    decodedChars.add(charCode.toChar())
                 }
-                URLDecoder.decode(decodedChars.toString(), "UTF-8")
-            } else encoded
+                val decodedString = decodedChars.joinToString("")
+               
+                // URL decode si es necesario
+                URLDecoder.decode(decodedString, "UTF-8")
+            } else {
+                encoded
+            }
         } catch (e: Exception) {
             encoded
         }
     }
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -294,40 +275,53 @@ class Tlnovelas : MainAPI() {
     ): Boolean {
         val response = app.get(data).text
         val videoLinks = mutableSetOf<String>()
-
-        // Método original (prioridad alta)
-        Regex("""e\[\d+\]\s*=\s*['"]([^'"]+)['"]""").findAll(response).forEach { match ->
+        // 1. BUSCAR Y DECODIFICAR FORMATO OFUSCADO JS (e[0] = '...')
+        val regexJsArray = Regex("""e\[\d+\]\s*=\s*['"]([^'"]+)['"]""")
+        regexJsArray.findAll(response).forEach { match ->
             val encodedUrl = match.groupValues[1]
             val decodedUrl = decodeVideoUrl(encodedUrl)
-            if (decodedUrl.startsWith("http")) videoLinks.add(decodedUrl)
+            if (decodedUrl.startsWith("http")) {
+                videoLinks.add(decodedUrl)
+            }
         }
-
-        Regex("""v_ideo\(([^)]+)\)""").findAll(response).forEach { match ->
+        // 2. BUSCAR EN LA FUNCIÓN v_ideo()
+        val regexVideFunc = Regex("""v_ideo\(([^)]+)\)""")
+        regexVideFunc.findAll(response).forEach { match ->
             val param = match.groupValues[1]
+            // Buscar el valor correspondiente en el array e[]
             val arrayIndex = Regex("""e\[(\d+)\]""").find(param)?.groupValues?.get(1)?.toIntOrNull()
             if (arrayIndex != null) {
-                Regex("""e\[$arrayIndex\]\s*=\s*['"]([^'"]+)['"]""").find(response)?.let { arrayMatch ->
+                // Buscar la definición de ese índice en el array
+                val arrayRegex = Regex("""e\[$arrayIndex\]\s*=\s*['"]([^'"]+)['"]""")
+                arrayRegex.find(response)?.let { arrayMatch ->
                     val encodedUrl = arrayMatch.groupValues[1]
                     val decodedUrl = decodeVideoUrl(encodedUrl)
-                    if (decodedUrl.startsWith("http")) videoLinks.add(decodedUrl)
+                    if (decodedUrl.startsWith("http")) {
+                        videoLinks.add(decodedUrl)
+                    }
                 }
             }
         }
-
+        // 3. FORMATO VIEJO (var e = ['...', '...'])
         Regex("""var\s+e\s*=\s*\[([^\]]+)\]""").findAll(response).forEach { match ->
-            match.groupValues[1].split(",").map { it.trim().trim('\'', '"') }
+            match.groupValues[1].split(",")
+                .map { it.trim().trim('\'', '"') }
                 .filter { it.isNotEmpty() }
                 .forEach { encodedUrl ->
                     val decodedUrl = decodeVideoUrl(encodedUrl)
-                    if (decodedUrl.startsWith("http")) videoLinks.add(decodedUrl)
+                    if (decodedUrl.startsWith("http")) {
+                        videoLinks.add(decodedUrl)
+                    }
                 }
         }
-
-        listOf(
+        // 4. BUSCAR DIRECTAMENTE PATRONES DECODIFICADOS
+        val decodedPatterns = listOf(
             Regex("""https?://[^"'\s<>]+\.(mp4|m3u8|mkv|avi|mov|flv|wmv|webm)[^"'\s<>]*""", RegexOption.IGNORE_CASE),
             Regex("""https?://[^"'\s<>]+/video/[^"'\s<>]+""", RegexOption.IGNORE_CASE),
             Regex("""https?://[^"'\s<>]+/embed/[^"'\s<>]+""", RegexOption.IGNORE_CASE)
-        ).forEach { pattern ->
+        )
+       
+        decodedPatterns.forEach { pattern ->
             pattern.findAll(response).forEach { match ->
                 val url = match.value
                 if (!url.contains("google") && !url.contains("adskeeper") && !url.contains("googletagmanager")) {
@@ -335,40 +329,40 @@ class Tlnovelas : MainAPI() {
                 }
             }
         }
-
+        // 5. IFRAMES como respaldo
         Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE).findAll(response).forEach {
             val link = it.groupValues[1]
-            if (!link.contains("google") && !link.contains("adskeeper")) videoLinks.add(link)
+            if (!link.contains("google") && !link.contains("adskeeper")) {
+                videoLinks.add(link)
+            }
         }
-
+        // Procesar todos los enlaces encontrados
         var success = false
         videoLinks.forEach { link ->
             try {
-                if (loadExtractor(link, data, subtitleCallback, callback)) success = true
-            } catch (_: Exception) {}
+                if (loadExtractor(link, data, subtitleCallback, callback)) {
+                    success = true
+                }
+            } catch (e: Exception) {
+                // Ignorar excepciones y continuar
+            }
         }
-
-        // Fallback: embeds con universal
-        if (!success || videoLinks.isEmpty()) {
+        // Fallback: Universal Extractor
+        if (!success) {
+            val universal = UniversalEmbedExtractor()
             val embeds = mutableListOf<String>()
             Regex("""e\[\d+\]\s*=\s*['"](https?://[^'"]+)['"]""").findAll(response).forEach {
                 embeds.add(it.groupValues[1])
             }
-            if (embeds.isEmpty()) {
-                Regex("""['"](https?://[^'"]+/(?:e|d)/[a-zA-Z0-9]+)['"]""").findAll(response).forEach {
-                    embeds.add(it.groupValues[1])
-                }
-            }
-
-            val universal = UniversalEmbedExtractor()
             embeds.distinct().forEach { embedUrl ->
                 try {
                     universal.getUrl(embedUrl, data, subtitleCallback, callback)
                     success = true
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    // Ignorar
+                }
             }
         }
-
-        return success
+        return success || videoLinks.isNotEmpty()
     }
 }
