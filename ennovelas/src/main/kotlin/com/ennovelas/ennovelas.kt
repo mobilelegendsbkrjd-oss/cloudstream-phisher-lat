@@ -93,91 +93,61 @@ class EnNovelas : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean = coroutineScope {
-        // 1. Página del episodio
         val episodeDoc = app.get(data).document
 
-        // 2. Botón "Ver Capítulo" → proxy
         val proxyUrl = episodeDoc.selectFirst("a[href*='a.poiw.online/enn.php?post=']")?.attr("href")
             ?: return@coroutineScope false
 
-        // 3. Intentar cargar el proxy con referer del episodio
-        val proxyResponse = app.get(proxyUrl, referer = data)
-        if (!proxyResponse.isSuccessful) return@coroutineScope false
-        val proxyDoc = proxyResponse.document
-
-        // 4. Decodificar base64 del post= (fallback si no hay iframes)
         val base64Part = proxyUrl.substringAfter("post=").trim()
+
         val servers = try {
             val decoded = String(Base64.getDecoder().decode(base64Part))
             Json.decodeFromString<Map<String, String>>(decoded)
-        } catch (e: Exception) { null }
-
-        // 5. Buscar iframes o scripts en el proxy (lo que carga en navegador)
-        val iframes = proxyDoc.select("iframe[src]").map { it.attr("abs:src") }.filter { it.isNotBlank() }
-        val scriptUrls = proxyDoc.select("script").mapNotNull { script ->
-            script.data().takeIf { it.contains("url =") || it.contains("file:") || it.contains(".mp4") || it.contains(".m3u8") }
-                ?.let { data ->
-                    data.substringAfter("url = '").substringBefore("'")
-                        .ifBlank { data.substringAfter("file: \"").substringBefore("\"") }
-                        .ifBlank { null }
-                }
+        } catch (e: Exception) {
+            return@coroutineScope false
         }
 
-        val allEmbeds = (iframes + scriptUrls).distinct().filter { it.isNotBlank() }
+        if (servers.isEmpty()) return@coroutineScope false
+
+        fun fixEmbed(url: String): String = url.replace("\\/", "/")
+            .replace("uqload.net", "uqload.to")
+            .replace("vidspeeds.com", "vidsspeeds.com")
+            .replace("vidhide.com", "vidhidepro.com")
 
         var found = false
 
-        // 6. Resolver embeds encontrados (prioridad iframes > base64)
-        allEmbeds.forEach { embed ->
-            val clean = embed.replace("\\/", "/")
-                .replace("uqload.net", "uqload.to")
-                .replace("vidspeeds.com", "vidsspeeds.com")
+        servers.forEach { (serverName, rawEmbed) ->
+            val embedUrl = fixEmbed(rawEmbed)
 
-            val success = loadExtractor(
-                url = clean,
-                referer = proxyUrl,
-                subtitleCallback = subtitleCallback,
-                callback = callback
+            val displayName = when (serverName.lowercase()) {
+                "vk" -> "VK.com"
+                "vidsspeeds", "vidspeeds" -> "Vidspeeds"
+                "uqload" -> "Uqload"
+                else -> serverName.uppercase()
+            }
+
+            // Llamada básica a loadExtractor (sin referer ni headers - tu versión no los soporta)
+            val resolved = loadExtractor(
+                embedUrl,
+                subtitleCallback,
+                callback
             )
-            if (success) found = true
-        }
 
-        // 7. Fallback al JSON base64 si no hay iframes
-        if (!found && servers != null) {
-            servers.forEach { (serverName, rawEmbed) ->
-                val embedUrl = rawEmbed.replace("\\/", "/")
-                    .replace("uqload.net", "uqload.to")
-                    .replace("vidspeeds.com", "vidsspeeds.com")
+            if (resolved) found = true
 
-                val displayName = when (serverName.lowercase()) {
-                    "vk" -> "VK.com"
-                    "vidsspeeds", "vidspeeds" -> "Vidspeeds"
-                    "uqload" -> "Uqload"
-                    else -> serverName.uppercase()
-                }
-
-                val success = loadExtractor(
-                    url = embedUrl,
-                    referer = proxyUrl,
-                    subtitleCallback = subtitleCallback,
-                    callback = callback
+            // Fallback directo
+            if (!resolved) {
+                callback(
+                    newExtractorLink(
+                        displayName,
+                        "$displayName - $serverName (fallback)",
+                        embedUrl
+                    ) {
+                        this.referer = proxyUrl
+                        this.quality = Qualities.Unknown.value
+                    }
                 )
-                if (success) found = true
-
-                // Último fallback directo
-                if (!success) {
-                    callback(
-                        newExtractorLink(
-                            source = displayName,
-                            name = "$displayName - fallback",
-                            url = embedUrl
-                        ) {
-                            this.referer = proxyUrl
-                            this.quality = Qualities.Unknown.value
-                        }
-                    )
-                    found = true
-                }
+                found = true
             }
         }
 
