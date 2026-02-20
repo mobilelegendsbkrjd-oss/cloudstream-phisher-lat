@@ -3,113 +3,79 @@ package com.tlnovelas
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
-import java.net.URLDecoder
-import java.util.Base64
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
-import com.google.gson.Gson
 
-class Tlnovelas : MainAPI() {
+class TLNovelasProvider : MainAPI() {
 
-    override var mainUrl = "https://ww2.tlnovelas.net"
-    override var name = "Tlnovelas"
+    override var mainUrl = "https://tlnovelas.org"
+    override var name = "TLNovelas"
     override val hasMainPage = true
-    override var lang = "es"
     override val hasQuickSearch = true
+    override var lang = "es"
     override val supportedTypes = setOf(TvType.TvSeries)
 
+    // 🔥 Categorías homepage
     override val mainPage = mainPageOf(
-        "" to "Últimos Capítulos",
-        "gratis/telenovelas/" to "Ver Telenovelas"
+        "$mainUrl/category/telenovelas/" to "Telenovelas",
+        "$mainUrl/category/capitulos/" to "Capítulos recientes"
     )
 
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
-        val url =
-            if (page == 1) "$mainUrl/${request.data}"
-            else "$mainUrl/${request.data}/page/$page"
+    // 🔎 BUSCADOR NORMAL
+    override suspend fun search(query: String): List<SearchResponse> {
+        val document = app.get("$mainUrl/?s=$query").document
 
-        val document = app.get(url).document
+        return document.select("article").mapNotNull { it.toSearchResult() }
+    }
 
-        val home = document.select(".vk-poster, .ani-card")
-            .mapNotNull { it.toSearchResult() }
-            .distinctBy { it.url }
+    // 🔎 SUGERENCIAS ARREGLADAS
+    override suspend fun quickSearch(query: String): List<SearchResponse> {
+        return search(query)
+    }
+
+    private fun Element.toSearchResult(): SearchResponse? {
+        val title = this.selectFirst("h2")?.text() ?: return null
+        val href = this.selectFirst("a")?.attr("href") ?: return null
+        val poster = this.selectFirst("img")?.attr("src")
+
+        return newTvSeriesSearchResponse(title, href) {
+            this.posterUrl = poster
+        }
+    }
+
+    // 🏠 HOMEPAGE
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val document = app.get("${request.data}/page/$page").document
+
+        val home = document.select("article").mapNotNull { it.toSearchResult() }
 
         return newHomePageResponse(request.name, home)
     }
 
-    private fun Element.toSearchResult(): SearchResponse? {
-        val title = selectFirst("a")?.attr("title") ?: return null
-        val href = selectFirst("a")?.attr("href") ?: return null
-        val poster = selectFirst("img")?.attr("src")
-
-        return newTvSeriesSearchResponse(
-            title,
-            fixUrl(href),
-            TvType.TvSeries
-        ) {
-            this.posterUrl = poster
-        }
-    }
-
-    override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/buscar/?q=$query"
-        return app.get(url).document
-            .select(".vk-poster, .ani-card")
-            .mapNotNull { it.toSearchResult() }
-            .distinctBy { it.url }
-    }
-
-    override suspend fun load(url: String): LoadResponse {
+    // 📺 CARGAR SERIE + EPISODIOS
+    override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
-        val title = document.selectFirst("h1")?.text() ?: "Telenovela"
-        val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
+        val title = document.selectFirst("h1")?.text() ?: return null
+        val poster = document.selectFirst("img")?.attr("src")
+        val description = document.selectFirst("p")?.text()
 
-        val episodes = document.select("a[href*='/ver/']")
-            .map {
-                val epUrl = it.attr("href")
-                val epName = it.text()
-                newEpisode(fixUrl(epUrl)) {
-                    name = epName
+        val episodes = document.select("a[href*=\"/capitulo/\"]")
+            .mapIndexed { index, element ->
+                val epUrl = element.attr("href")
+                val epTitle = element.text()
+
+                newEpisode(epUrl) {
+                    name = epTitle
+                    episode = index + 1
                 }
-            }.distinctBy { it.data }
+            }
 
-        return newTvSeriesLoadResponse(
-            title,
-            url,
-            TvType.TvSeries,
-            episodes
-        ) {
-            this.posterUrl = poster
+        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+            posterUrl = poster
+            plot = description
         }
     }
 
-    // -------------------------
-    // DECODIFICADOR SIMPLE
-    // -------------------------
-    private fun decodeVideoUrl(encoded: String): String {
-        return try {
-            val parts = encoded.split("|")
-            if (parts.size == 2) {
-                val encodedStr = parts[0]
-                val key = parts[1].toInt()
-                val decoded = encodedStr.mapIndexed { i, c ->
-                    (c.code - key - i).toChar()
-                }.joinToString("")
-                URLDecoder.decode(decoded, "UTF-8")
-            } else encoded
-        } catch (_: Exception) {
-            encoded
-        }
-    }
-
-    // -------------------------
-    // LOAD LINKS
-    // -------------------------
+    // 🎥 EXTRAER LINKS (VERSIÓN ESTABLE)
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -117,70 +83,57 @@ class Tlnovelas : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        val response = app.get(data).text
-        val videoLinks = mutableSetOf<String>()
-
-        // Buscar arrays e[]
-        Regex("""e\[\d+]\s*=\s*['"]([^'"]+)['"]""")
-            .findAll(response)
-            .forEach {
-                val decoded = decodeVideoUrl(it.groupValues[1])
-                if (decoded.startsWith("http"))
-                    videoLinks.add(decoded)
-            }
-
-        // Buscar urls directas
-        Regex("""https?://[^"' ]+\.(m3u8|mp4)[^"' ]*""")
-            .findAll(response)
-            .forEach {
-                videoLinks.add(it.value)
-            }
-
+        val document = app.get(data).document
         var success = false
 
-        videoLinks.forEach { link ->
-            try {
-                if (loadExtractor(link, data, subtitleCallback, callback)) {
+        // 1️⃣ Detectar iframes
+        document.select("iframe").forEach { iframe ->
+            val src = iframe.attr("src")
+            if (src.isNotBlank()) {
+                if (loadExtractor(fixUrl(src), data, subtitleCallback, callback)) {
                     success = true
                 }
-            } catch (_: Exception) {}
+            }
         }
+
+        // 2️⃣ Detectar embeds ocultos en scripts
+        val html = document.html()
+
+        Regex("""https?://[^"' ]+""")
+            .findAll(html)
+            .map { it.value }
+            .distinct()
+            .forEach { url ->
+                if (
+                    url.contains("m3u8") ||
+                    url.contains("mp4") ||
+                    url.contains("dood") ||
+                    url.contains("stream") ||
+                    url.contains("filemoon")
+                ) {
+                    if (loadExtractor(url, data, subtitleCallback, callback)) {
+                        success = true
+                    }
+                }
+            }
+
+        // 3️⃣ Detectar m3u8 directo
+        Regex("""https?://[^"' ]+\.m3u8[^"' ]*""")
+            .findAll(html)
+            .forEach {
+                callback.invoke(
+                    ExtractorLink(
+                        name,
+                        name,
+                        it.value,
+                        data,
+                        0,
+                        true
+                    )
+                )
+                success = true
+            }
 
         return success
-    }
-
-    // -------------------------
-    // BYSEJIKUAR AES DECRYPT
-    // -------------------------
-    private fun decryptBysejikuar(
-        iv: String,
-        payload: String,
-        keyParts: List<String>
-    ): String? {
-        return try {
-            val decoder = Base64.getUrlDecoder()
-
-            val ivBytes = decoder.decode(padBase64(iv))
-            val payloadBytes = decoder.decode(padBase64(payload))
-            val key = decoder.decode(padBase64(keyParts[0])) +
-                    decoder.decode(padBase64(keyParts[1]))
-
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            val spec = GCMParameterSpec(128, ivBytes)
-            val secretKey = SecretKeySpec(key, "AES")
-
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
-
-            String(cipher.doFinal(payloadBytes), Charsets.UTF_8)
-
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun padBase64(s: String): String {
-        var padded = s
-        while (padded.length % 4 != 0) padded += "="
-        return padded
     }
 }
