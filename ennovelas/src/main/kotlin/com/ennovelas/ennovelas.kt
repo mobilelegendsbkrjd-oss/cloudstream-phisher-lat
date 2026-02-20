@@ -87,33 +87,22 @@ class EnNovelas : MainAPI() {
         }
     }
 
-    override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean = coroutineScope {
-        val episodeDoc = app.get(data, headers = commonHeaders).document
+   override suspend fun loadLinks(
+    data: String,
+    isCasting: Boolean,
+    subtitleCallback: (SubtitleFile) -> Unit,
+    callback: (ExtractorLink) -> Unit
+): Boolean = coroutineScope {
+    val episodeDoc = app.get(data).document
 
-        val proxyUrl = episodeDoc.selectFirst("a[href*='a.poiw.online/enn.php?post=']")?.attr("href")
-            ?: return@coroutineScope false
+    val proxyUrl = episodeDoc.selectFirst("a[href*='a.poiw.online/enn.php?post=']")?.attr("href")
+        ?: return@coroutineScope false
 
-        val proxyDoc = app.get(proxyUrl, referer = data, headers = commonHeaders).document
-
-        val iframes = proxyDoc.select("iframe[src]").map { it.attr("abs:src") }.filter { it.isNotBlank() }
-
-        var found = false
-
-        iframes.forEach { embed ->
-            val resolved = loadExtractor(
-                url = embed,
-                referer = proxyUrl,
-                subtitleCallback = subtitleCallback,
-                callback = callback
-            )
-            if (resolved) found = true
-        }
+    PoiwExtractor().getUrl(proxyUrl, data, subtitleCallback, callback)
+    true
+}
 
         return@coroutineScope found
     }
 }
+
