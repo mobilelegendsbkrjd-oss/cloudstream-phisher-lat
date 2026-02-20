@@ -10,7 +10,6 @@ import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import com.google.gson.Gson
-import com.google.gson.JsonElement
 import com.google.gson.annotations.SerializedName
 
 class Tlnovelas : MainAPI() {
@@ -26,7 +25,10 @@ class Tlnovelas : MainAPI() {
         "gratis/telenovelas/" to "Ver Telenovelas"
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+    override suspend fun getMainPage(
+        page: Int,
+        request: MainPageRequest
+    ): HomePageResponse {
         val url = if (page <= 1) "$mainUrl/${request.data}" else "$mainUrl/${request.data}/page/$page"
         val document = app.get(url).document
         val home = document.select(".vk-poster, .ani-card, .p-content, .ani-txt")
@@ -98,128 +100,6 @@ class Tlnovelas : MainAPI() {
         }
     }
 
-    // ------------------------------------------------------------
-    // ADAPTACIÓN DIRECTA de Filemoon / bysejikuar (lógica copiada y simplificada)
-    // ------------------------------------------------------------
-    private suspend fun tryExtractBysejikuar(
-        embedUrl: String,
-        referer: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        try {
-            val matcher = Regex("""/(e|d)/([a-zA-Z0-9]+)""").find(embedUrl) ?: return false
-            val linkType = matcher.groupValues[1]
-            val videoId = matcher.groupValues[2]
-            val base = embedUrl.substringBefore("/e/").substringBefore("/d/") + "/"
-
-            val detailsUrl = "$base/api/videos/$videoId/embed/details"
-            val detailsText = app.get(detailsUrl, headers = mapOf("Referer" to referer)).text
-            val details = Gson().fromJson(detailsText, DetailsResponse::class.java)
-            val embedFrame = details.embed_frame_url ?: return false
-
-            val headers = mutableMapOf(
-                "User-Agent" to USER_AGENT,
-                "Referer" to embedFrame,
-                "X-Embed-Parent" to embedUrl
-            )
-
-            val playbackDomain = if (linkType == "d") base else embedFrame.substringBefore("/api/")
-            val playbackUrl = "$playbackDomain/api/videos/$videoId/embed/playback"
-
-            val playbackText = app.get(playbackUrl, headers = headers).text
-            val playback = Gson().fromJson(playbackText, PlaybackResponse::class.java).playback ?: return false
-
-            val decrypted = decryptBysejikuar(playback) ?: return false
-            val sources = Gson().fromJson(decrypted, DecryptedPlayback::class.java).sources ?: return false
-            if (sources.isEmpty()) return false
-
-            val sourceUrl = sources[0].url ?: return false
-
-            callback.invoke(
-                ExtractorLink(
-                    "Bysejikuar",
-                    "Bysejikuar",
-                    sourceUrl,
-                    referer,
-                    Qualities.Unknown.value,
-                    sourceUrl.contains(".m3u8")
-                )
-            )
-            return true
-        } catch (e: Exception) {
-            return false
-        }
-    }
-
-    private fun decryptBysejikuar(data: PlaybackData): String? {
-        try {
-            val decoder = Base64.getUrlDecoder()
-            val iv = decoder.decode(padBase64(data.iv))
-            val payload = decoder.decode(padBase64(data.payload))
-            val p1 = decoder.decode(padBase64(data.key_parts[0]))
-            val p2 = decoder.decode(padBase64(data.key_parts[1]))
-            val key = p1 + p2
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            val spec = GCMParameterSpec(128, iv)
-            val secretKey = SecretKeySpec(key, "AES")
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
-            return String(cipher.doFinal(payload), Charsets.UTF_8)
-        } catch (e: Exception) {
-            return null
-        }
-    }
-
-    private fun padBase64(s: String): String {
-        var padded = s
-        while (padded.length % 4 != 0) padded += "="
-        return padded
-    }
-
-    // ------------------------------------------------------------
-    // ADAPTACIÓN SIMPLE de LuluVdo (regex directo, sin Retrofit)
-    // ------------------------------------------------------------
-    private suspend fun tryExtractLuluVdo(
-        embedUrl: String,
-        referer: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        try {
-            val docText = app.get(embedUrl, headers = mapOf("Referer" to referer)).text
-
-            val sourceMatch = Regex("sources:\\s*\\[\\{file:\\s*\"(.*?)\"").find(docText)
-            val source = sourceMatch?.groupValues?.get(1) ?: return false
-
-            callback.invoke(
-                ExtractorLink(
-                    "LuluVdo",
-                    "LuluVdo",
-                    source,
-                    referer,
-                    Qualities.Unknown.value,
-                    source.contains(".m3u8")
-                )
-            )
-
-            val tracksPart = Regex("tracks:\\s*\\[(.*?)\\]").find(docText)?.groupValues?.get(1) ?: ""
-            Regex("file:\\s*\"(.*?)\",\\s*label:\\s*\"(.*?)\"").findAll(tracksPart).forEach {
-                val file = it.groupValues[1]
-                val label = it.groupValues[2]
-                if (label.lowercase() != "upload captions") {
-                    subtitleCallback(SubtitleFile(file, label))
-                }
-            }
-
-            return true
-        } catch (e: Exception) {
-            return false
-        }
-    }
-
-    // ------------------------------------------------------------
-    // loadLinks completo con fallback integrado
-    // ------------------------------------------------------------
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -230,7 +110,7 @@ class Tlnovelas : MainAPI() {
         val videoLinks = mutableSetOf<String>()
 
         // ----------------------------------------------------------------
-        // TODO TU CÓDIGO ORIGINAL (sin cambios)
+        // TU CÓDIGO ORIGINAL (intacto)
         // ----------------------------------------------------------------
         val regexJsArray = Regex("""e\[\d+\]\s*=\s*['"]([^'"]+)['"]""")
         regexJsArray.findAll(response).forEach { match ->
@@ -288,12 +168,14 @@ class Tlnovelas : MainAPI() {
         var success = false
         videoLinks.forEach { link ->
             try {
-                if (loadExtractor(link, data, subtitleCallback, callback)) success = true
-            } catch (_: Exception) {}
+                if (loadExtractor(link, data, subtitleCallback, callback)) {
+                    success = true
+                }
+            } catch (e: Exception) {}
         }
 
         // ----------------------------------------------------------------
-        // FALLBACK: lógica adaptada de tus extractores, sin clases nuevas
+        // FALLBACK: embeds con lógica adaptada (prioridad dooodster > luluvdo > bysejikuar)
         // ----------------------------------------------------------------
         if (!success) {
             val embeds = mutableListOf<String>()
@@ -301,21 +183,31 @@ class Tlnovelas : MainAPI() {
                 embeds.add(it.groupValues[1])
             }
 
-            embeds.distinct().forEach { embed ->
+            // Orden: dooodster primero, luego luluvdo, luego bysejikuar
+            val sortedEmbeds = embeds.sortedBy { embed ->
+                when {
+                    embed.contains("dooodster.com") -> 0
+                    embed.contains("luluvdo.com") -> 1
+                    embed.contains("bysejikuar.com") || embed.contains("f75s.com") -> 2
+                    else -> 3
+                }
+            }
+
+            sortedEmbeds.forEach { embed ->
                 try {
                     when {
-                        embed.contains("bysejikuar.com") || embed.contains("f75s.com") -> {
-                            success = success || tryExtractBysejikuar(embed, data, subtitleCallback, callback)
+                        embed.contains("dooodster.com") -> {
+                            loadExtractor(embed, data, subtitleCallback, callback)
+                            success = true
                         }
                         embed.contains("luluvdo.com") -> {
                             success = success || tryExtractLuluVdo(embed, data, subtitleCallback, callback)
                         }
-                        embed.contains("dooodster.com") -> {
-                            // Dood suele funcionar con loadExtractor directo
-                            success = success || loadExtractor(embed, data, subtitleCallback, callback)
+                        embed.contains("bysejikuar.com") || embed.contains("f75s.com") -> {
+                            success = success || tryExtractBysejikuar(embed, data, subtitleCallback, callback)
                         }
                         else -> {
-                            success = success || loadExtractor(embed, data, subtitleCallback, callback)
+                            loadExtractor(embed, data, subtitleCallback, callback)
                         }
                     }
                 } catch (_: Exception) {}
@@ -325,10 +217,200 @@ class Tlnovelas : MainAPI() {
         return success || videoLinks.isNotEmpty()
     }
 
-    // Modelos mínimos para bysejikuar (copiados de tu extractor original)
+    // ------------------------------------------------------------
+    // Función para Luluvdo (regex simple)
+    // ------------------------------------------------------------
+    private suspend fun tryExtractLuluVdo(
+        embedUrl: String,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        try {
+            val text = app.get(embedUrl, headers = mapOf("Referer" to referer)).text
+
+            val source = Regex("""sources:\s*\[\{file:"(.*?)"\}""").find(text)?.groupValues?.get(1) ?: return false
+
+            callback.invoke(
+                ExtractorLink(
+                    "LuluVdo",
+                    "LuluVdo",
+                    source,
+                    referer,
+                    Qualities.Unknown.value,
+                    source.contains(".m3u8")
+                )
+            )
+
+            val tracks = Regex("""tracks:\s*\[(.*?)\]""").find(text)?.groupValues?.get(1) ?: ""
+            Regex("""file:\s*"([^"]+)",\s*label:\s*"([^"]+)"""").findAll(tracks).forEach {
+                val file = it.groupValues[1]
+                val label = it.groupValues[2]
+                if (label.lowercase() != "upload captions") {
+                    subtitleCallback(SubtitleFile(file, label))
+                }
+            }
+            return true
+        } catch (_: Exception) {
+            return false
+        }
+    }
+
+    // ------------------------------------------------------------
+    // Función para Bysejikuar / f75s (con challenge + attest simulado)
+    // ------------------------------------------------------------
+    private suspend fun tryExtractBysejikuar(
+        embedUrl: String,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        try {
+            val matcher = Regex("""/(e|d)/([a-zA-Z0-9]+)""").find(embedUrl) ?: return false
+            val linkType = matcher.groupValues[1]
+            val videoId = matcher.groupValues[2]
+            val base = embedUrl.substringBefore("/e/").substringBefore("/d/") + "/"
+
+            // Headers comunes
+            val headers = mutableMapOf(
+                "User-Agent" to USER_AGENT,
+                "Accept" to "*/*",
+                "Referer" to referer,
+                "X-Embed-Origin" to "ww2.tlnovelas.net",
+                "X-Embed-Parent" to embedUrl
+            )
+
+            // 1. Details
+            val detailsUrl = "$base/api/videos/$videoId/embed/details"
+            val detailsText = app.get(detailsUrl, headers = headers).text
+            val details = Gson().fromJson(detailsText, DetailsResponse::class.java)
+            val embedFrame = details.embed_frame_url ?: return false
+
+            headers["Referer"] = embedFrame
+
+            // 2. Settings (opcional, pero lo hacemos)
+            val settingsUrl = "$base/api/videos/$videoId/embed/settings"
+            app.get(settingsUrl, headers = headers)
+
+            // 3. Challenge (POST vacío)
+            val challengeUrl = "$base/api/videos/access/challenge"
+            app.post(challengeUrl, headers = headers, data = "")
+
+            // 4. Attest con valores fijos de tus curls (hack temporal)
+            val attestUrl = "$base/api/videos/access/attest"
+            val attestBody = """
+            {
+              "viewer_id": "38b57136152c4fd0a647c157d61572ef",
+              "device_id": "0VfTeyT4inw0PcQy23_N0w",
+              "challenge_id": "BEsVYVdleRp81E_dmvUFpe7c",
+              "nonce": "${java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 32)}",
+              "signature": "SFswckSRGi9Jdy5NxglcpWU6W0L-grT76sQMEwwKGIPtB0BnDme9po9rJP9aKl2P0Eyxt4Nb89UgvEiNQ8ndnQ",
+              "public_key": {
+                "crv": "P-256",
+                "ext": true,
+                "key_ops": ["verify"],
+                "kty": "EC",
+                "x": "FOzkZAAfk2LaVmRL-V7X0eoP0AoSIdSMA-45NRSURTw",
+                "y": "uo-xYabtgV4IsUjNtfc1F_9JpN46j8hbPTI8ek127lw"
+              },
+              "client": {
+                "user_agent": "${USER_AGENT}",
+                "architecture": "x86",
+                "bitness": "64",
+                "platform": "Windows",
+                "platform_version": "10.0.0",
+                "model": "",
+                "ua_full_version": "143.0.7499.170",
+                "brand_full_versions": [
+                  {"brand": "Google Chrome", "version": "143.0.7499.170"},
+                  {"brand": "Chromium", "version": "143.0.7499.170"},
+                  {"brand": "Not A(Brand", "version": "24.0.0.0"}
+                ],
+                "pixel_ratio": 1,
+                "screen_width": 1366,
+                "screen_height": 768,
+                "color_depth": 24,
+                "languages": ["es-419", "es"],
+                "timezone": "America/Mexico_City",
+                "hardware_concurrency": 16,
+                "device_memory": 8,
+                "touch_points": 0,
+                "webgl_vendor": "Google Inc. (Intel)",
+                "webgl_renderer": "ANGLE (Intel, Intel(R) UHD Graphics 770 (0x00004680) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+                "canvas_hash": "VgsEVJRdYWWbK0QvEoACf3PEkbidL9dadWKnNxWbvvw",
+                "audio_hash": "RyBmlOc4cA7XhqmvkyO40eo8sOa5q-CFlrTnf70qADY",
+                "pointer_type": "fine,hover",
+                "extra": {"vendor": "Google Inc.", "appVersion": "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"}
+              },
+              "storage": {
+                "cookie": "38b57136152c4fd0a647c157d61572ef",
+                "indexed_db": "38b57136152c4fd0a647c157d61572ef:0VfTeyT4inw0PcQy23_N0w"
+              },
+              "attributes": {"entropy": "high"}
+            }
+            """.trimIndent()
+
+            app.post(attestUrl, headers = headers + ("Content-Type" to "application/json"), data = attestBody)
+
+            // 5. Playback
+            val playbackUrl = "$base/api/videos/$videoId/embed/playback"
+            val playbackText = app.post(playbackUrl, headers = headers + ("Content-Type" to "application/json"), data = """{"fingerprint":{"token":"eyJ2aWV3ZXJfaWQiOiIzOGI1NzEzNjE1MmM0ZmQwYTY0N2MxNTdkNjE1NzJlZiIsImRldmljZV9pZCI6IjBWZlRleVQ0aW53MFBjUXkyM19OMHciLCJjb25maWRlbmNlIjowLjkzLCJpYXQiOjE3NzE2MTM0NTYsImV4cCI6MTc3MTYxNDA1Nn0.qdHhJr-5Tz76uEZXQ_Ov3jIAm_lMYDynEUlC6V9vdzk","viewer_id":"38b57136152c4fd0a647c157d61572ef","device_id":"0VfTeyT4inw0PcQy23_N0w","confidence":0.93}}""").text
+            val playback = Gson().fromJson(playbackText, PlaybackResponse::class.java).playback ?: return false
+
+            val decryptedJson = decryptBysejikuar(playback) ?: return false
+            val decrypted = Gson().fromJson(decryptedJson, DecryptedPlayback::class.java) ?: return false
+            val sourceUrl = decrypted.sources?.firstOrNull()?.url ?: return false
+
+            callback.invoke(
+                ExtractorLink(
+                    "Bysejikuar",
+                    "Bysejikuar HLS",
+                    sourceUrl,
+                    "$base/",
+                    Qualities.Unknown.value,
+                    sourceUrl.contains(".m3u8")
+                )
+            )
+            return true
+        } catch (e: Exception) {
+            return false
+        }
+    }
+
+    private fun decryptBysejikuar(data: PlaybackData): String? {
+        try {
+            val decoder = Base64.getUrlDecoder()
+            val iv = decoder.decode(padBase64(data.iv))
+            val payload = decoder.decode(padBase64(data.payload))
+            val p1 = decoder.decode(padBase64(data.key_parts[0]))
+            val p2 = decoder.decode(padBase64(data.key_parts[1]))
+            val key = p1 + p2
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            val spec = GCMParameterSpec(128, iv)
+            val secretKey = SecretKeySpec(key, "AES")
+            cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
+            return String(cipher.doFinal(payload), Charsets.UTF_8)
+        } catch (_: Exception) {
+            return null
+        }
+    }
+
+    private fun padBase64(s: String): String {
+        var padded = s
+        while (padded.length % 4 != 0) padded += "="
+        return padded
+    }
+
+    // Modelos mínimos
     data class DetailsResponse(val embed_frame_url: String?)
     data class PlaybackResponse(val playback: PlaybackData?)
-    data class PlaybackData(val iv: String, val payload: String, val key_parts: List<String>)
-    data class DecryptedPlayback(val sources: List<DecryptedSource>?)
+    data class PlaybackData(
+        val iv: String,
+        val payload: String,
+        val key_parts: List<String>
+    )
+    data class DecryptedPlayback(
+        val sources: List<DecryptedSource>?
+    )
     data class DecryptedSource(val url: String?)
 }
