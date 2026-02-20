@@ -1,6 +1,7 @@
 package com.tlnovelas
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
 import java.net.URLDecoder
@@ -173,7 +174,8 @@ class Tlnovelas : MainAPI() {
         }
 
         // ----------------------------------------------------------------
-        // FALLBACK: embeds con lógica integrada (sin clases nuevas)
+        // FALLBACK: embeds con lógica integrada
+        // Prioridad: dooodster > luluvdo > bysejikuar
         // ----------------------------------------------------------------
         if (!success) {
             val embeds = mutableListOf<String>()
@@ -181,7 +183,6 @@ class Tlnovelas : MainAPI() {
                 embeds.add(it.groupValues[1])
             }
 
-            // Prioridad: dooodster > luluvdo > bysejikuar
             val sortedEmbeds = embeds.sortedBy { embed ->
                 when {
                     embed.contains("dooodster.com") -> 0
@@ -233,7 +234,7 @@ class Tlnovelas : MainAPI() {
                     "LuluVdo",
                     source,
                     referer,
-                    -1,  // Unknown quality (tu versión no tiene Qualities)
+                    -1,  // Unknown quality
                     source.contains(".m3u8")
                 )
             )
@@ -252,7 +253,7 @@ class Tlnovelas : MainAPI() {
         }
     }
 
-    // Lógica Bysejikuar (con challenge/attest simulado)
+    // Lógica Bysejikuar (flujo completo con challenge/attest simulado)
     private suspend fun tryExtractBysejikuar(
         embedUrl: String,
         referer: String,
@@ -289,7 +290,7 @@ class Tlnovelas : MainAPI() {
             val challengeUrl = "$base/api/videos/access/challenge"
             app.post(challengeUrl, headers = headers, data = "")
 
-            // 4. Attest (valores fijos de tus curls)
+            // 4. Attest (fingerprint fijo de tus curls)
             val attestUrl = "$base/api/videos/access/attest"
             val attestBody = """
             {
@@ -345,7 +346,7 @@ class Tlnovelas : MainAPI() {
 
             app.post(attestUrl, headers = headers + ("Content-Type" to "application/json"), data = attestBody)
 
-            // 5. Playback (con fingerprint fijo de tus curls)
+            // 5. Playback
             val playbackUrl = "$base/api/videos/$videoId/embed/playback"
             val playbackBody = """{"fingerprint":{"token":"eyJ2aWV3ZXJfaWQiOiIzOGI1NzEzNjE1MmM0ZmQwYTY0N2MxNTdkNjE1NzJlZiIsImRldmljZV9pZCI6IjBWZlRleVQ0aW53MFBjUXkyM19OMHciLCJjb25maWRlbmNlIjowLjkzLCJpYXQiOjE3NzE2MTM0NTYsImV4cCI6MTc3MTYxNDA1Nn0.qdHhJr-5Tz76uEZXQ_Ov3jIAm_lMYDynEUlC6V9vdzk","viewer_id":"38b57136152c4fd0a647c157d61572ef","device_id":"0VfTeyT4inw0PcQy23_N0w","confidence":0.93}}"""
             val playbackText = app.post(playbackUrl, headers = headers + ("Content-Type" to "application/json"), data = playbackBody).text
@@ -361,7 +362,7 @@ class Tlnovelas : MainAPI() {
                     "Bysejikuar HLS",
                     sourceUrl,
                     "$base/",
-                    -1,  // Unknown quality
+                    -1,
                     sourceUrl.contains(".m3u8")
                 )
             )
