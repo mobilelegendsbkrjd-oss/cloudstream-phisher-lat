@@ -73,45 +73,62 @@ plot = description
 }
 }
 override suspend fun loadLinks(
-data: String,
-isCasting: Boolean,
-subtitleCallback: (SubtitleFile) -> Unit,
-callback: (ExtractorLink) -> Unit
+    data: String,
+    isCasting: Boolean,
+    subtitleCallback: (SubtitleFile) -> Unit,
+    callback: (ExtractorLink) -> Unit
 ): Boolean = coroutineScope {
-val episodeDoc = app.get(data).document
-// Encontrar el botón "Ver Capítulo"
-val proxyUrl = episodeDoc.selectFirst("a[href*='a.poiw.online/enn.php?post=']")?.attr("href")
-?: return@coroutineScope false
-// Cargar la página del proxy con referer = episodio (simula click)
-val proxyDoc = app.get(proxyUrl, referer = data).document
-// Extraer todos los iframes de la página del proxy
-val embeds = proxyDoc.select("iframe").mapNotNull { it.attr("src") }.filter { it.isNotBlank() }
-if (embeds.isEmpty()) return@coroutineScope false
-var found = false
-embeds.forEachIndexed { index, embedUrl ->
-// Resolver cada iframe/embed con referer = proxyUrl
-val resolved = loadExtractor(
-url = embedUrl,
-referer = proxyUrl,
-subtitleCallback = subtitleCallback,
-callback = callback
-)
-if (resolved) found = true
-// Fallback si no resuelve
-if (!resolved) {
-callback(
-newExtractorLink(
-source = "Embed $index",
-name = "Directo $index",
-url = embedUrl
-) {
-this.referer = proxyUrl
-this.quality = Qualities.Unknown.value
+    // 1. Página del episodio
+    val episodeDoc = app.get(data, headers = commonHeaders).document
+
+    // 2. Encontrar botón "Ver Capítulo"
+    val proxyUrl = episodeDoc.selectFirst("a[href*='a.poiw.online/enn.php?post=']")?.attr("href")
+        ?: return@coroutineScope false
+
+    // 3. Cargar la página intermedia (proxy) con referer del episodio → simula click
+    val proxyResponse = app.get(proxyUrl, referer = data, headers = commonHeaders, timeout = 20)
+    if (!proxyResponse.isSuccessful || proxyResponse.text.contains("home") || proxyResponse.text.contains("blog")) {
+        // Si redirige a home, falló la simulación
+        return@coroutineScope false
+    }
+    val proxyDoc = proxyResponse.document
+
+    // 4. Extraer iframes o embeds reales del proxy (aquí está el reproductor)
+    val iframes = proxyDoc.select("iframe[src]").map { it.attr("abs:src") }.filter { it.isNotBlank() }
+    val scriptsWithUrl = proxyDoc.select("script").mapNotNull { script ->
+        script.data().takeIf { it.contains("url =") || it.contains("file:") || it.contains(".m3u8") || it.contains(".mp4") }
+            ?.let { data ->
+                data.substringAfter("url = '").substringBefore("'")
+                    .ifBlank { data.substringAfter("file: \"").substringBefore("\"") }
+                    .ifBlank { null }
+            }
+    }
+
+    val allSources = (iframes + scriptsWithUrl).distinct().filter { 
+        it.contains("embed") || it.contains("video_ext") || it.contains(".mp4") || it.contains(".m3u8") 
+    }
+
+    if (allSources.isEmpty()) return@coroutineScope false
+
+    var found = false
+
+    allSources.forEach { sourceUrl ->
+        val cleanSource = sourceUrl.replace("\\/", "/")
+            .replace("uqload.net", "uqload.to")
+            .replace("vidspeeds.com", "vidsspeeds.com")
+
+        // 5. Resolver con nativos, referer = proxy (crucial)
+        val resolved = loadExtractor(
+            url = cleanSource,
+            referer = proxyUrl,
+            subtitleCallback = subtitleCallback,
+            callback = callback
+        )
+
+        if (resolved) found = true
+    }
+
+    return@coroutineScope found
 }
-)
-found = true
 }
-}
-return@coroutineScope found
-}
-}
+
