@@ -20,13 +20,6 @@ class EnNovelas : MainAPI() {
         TvType.Movie
     )
 
-    private val commonHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language" to "es-ES,es;q=0.9",
-        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Referer" to mainUrl
-    )
-
     override val mainPage = mainPageOf(
         "$mainUrl/episodes" to "Últimos Capítulos",
         "$mainUrl/series" to "Series",
@@ -34,7 +27,7 @@ class EnNovelas : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        val doc = app.get(request.data, headers = commonHeaders).document
+        val doc = app.get(request.data).document
         val items = doc.select(".block-post").mapNotNull { element ->
             val href = element.selectFirst("a")?.attr("href") ?: return@mapNotNull null
             val title = element.selectFirst(".title")?.text()?.trim() ?: return@mapNotNull null
@@ -49,7 +42,7 @@ class EnNovelas : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val doc = app.get("$mainUrl/?s=$query", headers = commonHeaders).document
+        val doc = app.get("$mainUrl/?s=$query").document
         return doc.select(".block-post").mapNotNull { element ->
             val href = element.selectFirst("a")?.attr("href") ?: return@mapNotNull null
             val title = element.selectFirst(".title")?.text()?.trim() ?: return@mapNotNull null
@@ -62,7 +55,7 @@ class EnNovelas : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val doc = app.get(url, headers = commonHeaders).document
+        val doc = app.get(url).document
         val title = doc.selectFirst("h1")?.ownText()?.trim() ?: return null
         val description = doc.selectFirst(".postDesc, .post-entry, .story")?.text()?.trim() ?: ""
         val poster = doc.selectFirst("img.imgLoaded, img[alt*='poster'], .poster img")
@@ -98,30 +91,22 @@ class EnNovelas : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean = coroutineScope {
-        val episodeDoc = app.get(data, headers = commonHeaders).document
+        val episodeDoc = app.get(data).document
 
         val proxyUrl = episodeDoc.selectFirst("a[href*='a.poiw.online/enn.php?post=']")?.attr("href")
             ?: return@coroutineScope false
 
-        // Intentamos cargar la página del proxy con referer del episodio
-        val proxyResponse = app.get(proxyUrl, referer = data, headers = commonHeaders)
-        if (!proxyResponse.isSuccessful) return@coroutineScope false
-
-        val proxyDoc = proxyResponse.document
-
-        // Extraer base64 del post= (por si acaso)
         val base64Part = proxyUrl.substringAfter("post=").trim()
 
-        val servers: Map<String, String>? = try {
+        val servers = try {
             val decoded = String(Base64.getDecoder().decode(base64Part))
-            Json.decodeFromString(decoded)
+            Json.decodeFromString<Map<String, String>>(decoded)
         } catch (e: Exception) {
-            null
+            return@coroutineScope false
         }
 
-        if (servers.isNullOrEmpty()) return@coroutineScope false
+        if (servers.isEmpty()) return@coroutineScope false
 
-        // Limpieza de dominios
         fun fixEmbed(url: String): String = url.replace("\\/", "/")
             .replace("uqload.net", "uqload.to")
             .replace("vidspeeds.com", "vidsspeeds.com")
@@ -129,22 +114,38 @@ class EnNovelas : MainAPI() {
 
         var found = false
 
-        // Prioridad de servidores
-        listOf("vk", "uqload", "vidsspeeds", "vidspeeds").forEach { key ->
-            servers[key]?.let { raw ->
-                val embedUrl = fixEmbed(raw)
+        servers.forEach { (serverName, rawEmbed) ->
+            val embedUrl = fixEmbed(rawEmbed)
 
-                // Referer del proxy (clave para pasar anti-bot)
-                val embedReferer = proxyUrl
+            val displayName = when (serverName.lowercase()) {
+                "vk" -> "VK.com"
+                "vidsspeeds", "vidspeeds" -> "Vidspeeds"
+                "uqload" -> "Uqload"
+                else -> serverName.uppercase()
+            }
 
-                val success = loadExtractor(
-                    url = embedUrl,
-                    referer = embedReferer,
-                    subtitleCallback = subtitleCallback,
-                    callback = callback
+            // Llamada básica a loadExtractor (sin referer ni headers, tu versión no los acepta)
+            val resolved = loadExtractor(
+                url = embedUrl,
+                subtitleCallback = subtitleCallback,
+                callback = callback
+            )
+
+            if (resolved) found = true
+
+            // Fallback directo con referer del proxy
+            if (!resolved) {
+                callback(
+                    newExtractorLink(
+                        source = displayName,
+                        name = "$displayName - $serverName (fallback)",
+                        url = embedUrl
+                    ) {
+                        this.referer = proxyUrl  // Referer proxy
+                        this.quality = Qualities.Unknown.value
+                    }
                 )
-
-                if (success) found = true
+                found = true
             }
         }
 
