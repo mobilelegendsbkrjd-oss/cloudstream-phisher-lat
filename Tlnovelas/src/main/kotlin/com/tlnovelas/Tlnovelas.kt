@@ -1,7 +1,6 @@
 package com.tlnovelas
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import org.jsoup.nodes.Element
 import java.net.URLDecoder
@@ -10,7 +9,6 @@ import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import com.google.gson.Gson
-import com.google.gson.annotations.SerializedName
 
 class Tlnovelas : MainAPI() {
     override var mainUrl = "https://ww2.tlnovelas.net"
@@ -175,7 +173,7 @@ class Tlnovelas : MainAPI() {
         }
 
         // ----------------------------------------------------------------
-        // FALLBACK: embeds con lógica adaptada (prioridad dooodster > luluvdo > bysejikuar)
+        // FALLBACK: embeds con lógica integrada (sin clases nuevas)
         // ----------------------------------------------------------------
         if (!success) {
             val embeds = mutableListOf<String>()
@@ -183,7 +181,7 @@ class Tlnovelas : MainAPI() {
                 embeds.add(it.groupValues[1])
             }
 
-            // Orden: dooodster primero, luego luluvdo, luego bysejikuar
+            // Prioridad: dooodster > luluvdo > bysejikuar
             val sortedEmbeds = embeds.sortedBy { embed ->
                 when {
                     embed.contains("dooodster.com") -> 0
@@ -217,9 +215,7 @@ class Tlnovelas : MainAPI() {
         return success || videoLinks.isNotEmpty()
     }
 
-    // ------------------------------------------------------------
-    // Función para Luluvdo (regex simple)
-    // ------------------------------------------------------------
+    // Lógica Luluvdo (regex simple)
     private suspend fun tryExtractLuluVdo(
         embedUrl: String,
         referer: String,
@@ -237,7 +233,7 @@ class Tlnovelas : MainAPI() {
                     "LuluVdo",
                     source,
                     referer,
-                    Qualities.Unknown.value,
+                    -1,  // Unknown quality (tu versión no tiene Qualities)
                     source.contains(".m3u8")
                 )
             )
@@ -256,9 +252,7 @@ class Tlnovelas : MainAPI() {
         }
     }
 
-    // ------------------------------------------------------------
-    // Función para Bysejikuar / f75s (con challenge + attest simulado)
-    // ------------------------------------------------------------
+    // Lógica Bysejikuar (con challenge/attest simulado)
     private suspend fun tryExtractBysejikuar(
         embedUrl: String,
         referer: String,
@@ -271,7 +265,6 @@ class Tlnovelas : MainAPI() {
             val videoId = matcher.groupValues[2]
             val base = embedUrl.substringBefore("/e/").substringBefore("/d/") + "/"
 
-            // Headers comunes
             val headers = mutableMapOf(
                 "User-Agent" to USER_AGENT,
                 "Accept" to "*/*",
@@ -288,7 +281,7 @@ class Tlnovelas : MainAPI() {
 
             headers["Referer"] = embedFrame
 
-            // 2. Settings (opcional, pero lo hacemos)
+            // 2. Settings (opcional)
             val settingsUrl = "$base/api/videos/$videoId/embed/settings"
             app.get(settingsUrl, headers = headers)
 
@@ -296,14 +289,14 @@ class Tlnovelas : MainAPI() {
             val challengeUrl = "$base/api/videos/access/challenge"
             app.post(challengeUrl, headers = headers, data = "")
 
-            // 4. Attest con valores fijos de tus curls (hack temporal)
+            // 4. Attest (valores fijos de tus curls)
             val attestUrl = "$base/api/videos/access/attest"
             val attestBody = """
             {
               "viewer_id": "38b57136152c4fd0a647c157d61572ef",
               "device_id": "0VfTeyT4inw0PcQy23_N0w",
               "challenge_id": "BEsVYVdleRp81E_dmvUFpe7c",
-              "nonce": "${java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 32)}",
+              "nonce": "${java.util.UUID.randomUUID().toString().replace("-", "").take(32)}",
               "signature": "SFswckSRGi9Jdy5NxglcpWU6W0L-grT76sQMEwwKGIPtB0BnDme9po9rJP9aKl2P0Eyxt4Nb89UgvEiNQ8ndnQ",
               "public_key": {
                 "crv": "P-256",
@@ -352,9 +345,10 @@ class Tlnovelas : MainAPI() {
 
             app.post(attestUrl, headers = headers + ("Content-Type" to "application/json"), data = attestBody)
 
-            // 5. Playback
+            // 5. Playback (con fingerprint fijo de tus curls)
             val playbackUrl = "$base/api/videos/$videoId/embed/playback"
-            val playbackText = app.post(playbackUrl, headers = headers + ("Content-Type" to "application/json"), data = """{"fingerprint":{"token":"eyJ2aWV3ZXJfaWQiOiIzOGI1NzEzNjE1MmM0ZmQwYTY0N2MxNTdkNjE1NzJlZiIsImRldmljZV9pZCI6IjBWZlRleVQ0aW53MFBjUXkyM19OMHciLCJjb25maWRlbmNlIjowLjkzLCJpYXQiOjE3NzE2MTM0NTYsImV4cCI6MTc3MTYxNDA1Nn0.qdHhJr-5Tz76uEZXQ_Ov3jIAm_lMYDynEUlC6V9vdzk","viewer_id":"38b57136152c4fd0a647c157d61572ef","device_id":"0VfTeyT4inw0PcQy23_N0w","confidence":0.93}}""").text
+            val playbackBody = """{"fingerprint":{"token":"eyJ2aWV3ZXJfaWQiOiIzOGI1NzEzNjE1MmM0ZmQwYTY0N2MxNTdkNjE1NzJlZiIsImRldmljZV9pZCI6IjBWZlRleVQ0aW53MFBjUXkyM19OMHciLCJjb25maWRlbmNlIjowLjkzLCJpYXQiOjE3NzE2MTM0NTYsImV4cCI6MTc3MTYxNDA1Nn0.qdHhJr-5Tz76uEZXQ_Ov3jIAm_lMYDynEUlC6V9vdzk","viewer_id":"38b57136152c4fd0a647c157d61572ef","device_id":"0VfTeyT4inw0PcQy23_N0w","confidence":0.93}}"""
+            val playbackText = app.post(playbackUrl, headers = headers + ("Content-Type" to "application/json"), data = playbackBody).text
             val playback = Gson().fromJson(playbackText, PlaybackResponse::class.java).playback ?: return false
 
             val decryptedJson = decryptBysejikuar(playback) ?: return false
@@ -367,12 +361,12 @@ class Tlnovelas : MainAPI() {
                     "Bysejikuar HLS",
                     sourceUrl,
                     "$base/",
-                    Qualities.Unknown.value,
+                    -1,  // Unknown quality
                     sourceUrl.contains(".m3u8")
                 )
             )
             return true
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             return false
         }
     }
@@ -401,7 +395,7 @@ class Tlnovelas : MainAPI() {
         return padded
     }
 
-    // Modelos mínimos
+    // Modelos
     data class DetailsResponse(val embed_frame_url: String?)
     data class PlaybackResponse(val playback: PlaybackData?)
     data class PlaybackData(
