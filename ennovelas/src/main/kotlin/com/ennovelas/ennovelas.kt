@@ -21,9 +21,9 @@ class EnNovelas : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-       
+        "$mainUrl/episodes" to "Últimos Capítulos",
         "$mainUrl/series" to "Series",
-        
+        "$mainUrl/movies" to "Películas"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
@@ -126,12 +126,8 @@ class EnNovelas : MainAPI() {
                 else -> serverName.uppercase()
             }
 
-            // Llamada básica a loadExtractor (sin referer ni headers - tu versión no los soporta)
-            val resolved = loadExtractor(
-                embedUrl,
-                subtitleCallback,
-                callback
-            )
+            // Llamada básica a loadExtractor (sin parámetros extras)
+            val resolved = loadExtractor(embedUrl, subtitleCallback, callback)
 
             if (resolved) found = true
 
@@ -154,4 +150,3 @@ class EnNovelas : MainAPI() {
         return@coroutineScope found
     }
 }
-
