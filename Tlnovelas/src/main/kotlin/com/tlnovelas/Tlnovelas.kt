@@ -13,20 +13,18 @@ class TLNovelasProvider : MainAPI() {
     override var lang = "es"
     override val supportedTypes = setOf(TvType.TvSeries)
 
-    // 🔥 Categorías homepage
     override val mainPage = mainPageOf(
         "$mainUrl/category/telenovelas/" to "Telenovelas",
         "$mainUrl/category/capitulos/" to "Capítulos recientes"
     )
 
-    // 🔎 BUSCADOR NORMAL
+    // 🔎 SEARCH
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl/?s=$query").document
-
         return document.select("article").mapNotNull { it.toSearchResult() }
     }
 
-    // 🔎 SUGERENCIAS ARREGLADAS
+    // 🔎 QUICK SEARCH (arregla sugerencias)
     override suspend fun quickSearch(query: String): List<SearchResponse> {
         return search(query)
     }
@@ -44,13 +42,11 @@ class TLNovelasProvider : MainAPI() {
     // 🏠 HOMEPAGE
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get("${request.data}/page/$page").document
-
         val home = document.select("article").mapNotNull { it.toSearchResult() }
-
         return newHomePageResponse(request.name, home)
     }
 
-    // 📺 CARGAR SERIE + EPISODIOS
+    // 📺 LOAD SERIES + EPISODES
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
@@ -59,6 +55,7 @@ class TLNovelasProvider : MainAPI() {
         val description = document.selectFirst("p")?.text()
 
         val episodes = document.select("a[href*=\"/capitulo/\"]")
+            .distinctBy { it.attr("href") }
             .mapIndexed { index, element ->
                 val epUrl = element.attr("href")
                 val epTitle = element.text()
@@ -75,7 +72,7 @@ class TLNovelasProvider : MainAPI() {
         }
     }
 
-    // 🎥 EXTRAER LINKS (VERSIÓN ESTABLE)
+    // 🎥 LOAD LINKS (VERSIÓN COMPATIBLE 2025)
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -84,9 +81,10 @@ class TLNovelasProvider : MainAPI() {
     ): Boolean {
 
         val document = app.get(data).document
+        val html = document.html()
         var success = false
 
-        // 1️⃣ Detectar iframes
+        // 1️⃣ IFRAME DIRECTOS
         document.select("iframe").forEach { iframe ->
             val src = iframe.attr("src")
             if (src.isNotBlank()) {
@@ -96,9 +94,7 @@ class TLNovelasProvider : MainAPI() {
             }
         }
 
-        // 2️⃣ Detectar embeds ocultos en scripts
-        val html = document.html()
-
+        // 2️⃣ URLs OCULTAS EN SCRIPT
         Regex("""https?://[^"' ]+""")
             .findAll(html)
             .map { it.value }
@@ -117,18 +113,18 @@ class TLNovelasProvider : MainAPI() {
                 }
             }
 
-        // 3️⃣ Detectar m3u8 directo
+        // 3️⃣ M3U8 DIRECTO (SIN DEPRECATED)
         Regex("""https?://[^"' ]+\.m3u8[^"' ]*""")
             .findAll(html)
             .forEach {
                 callback.invoke(
-                    ExtractorLink(
-                        name,
-                        name,
-                        it.value,
-                        data,
-                        0,
-                        true
+                    newExtractorLink(
+                        source = name,
+                        name = name,
+                        url = it.value,
+                        referer = data,
+                        quality = Qualities.Unknown.value,
+                        isM3u8 = true
                     )
                 )
                 success = true
