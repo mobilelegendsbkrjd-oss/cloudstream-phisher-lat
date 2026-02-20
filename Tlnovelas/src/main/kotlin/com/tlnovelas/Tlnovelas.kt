@@ -1,135 +1,373 @@
-package com.tlnovelas
+package com.ennovelas
+
+
 
 import com.lagradost.cloudstream3.*
+
 import com.lagradost.cloudstream3.utils.*
-import org.jsoup.nodes.Element
 
-class TLNovelasProvider : MainAPI() {
+import kotlinx.coroutines.coroutineScope
 
-    override var mainUrl = "https://tlnovelas.org"
-    override var name = "TLNovelas"
-    override val hasMainPage = true
-    override val hasQuickSearch = true
+import kotlinx.serialization.json.Json
+
+import kotlinx.serialization.decodeFromString
+
+import org.jsoup.nodes.Document
+
+import java.util.Base64
+
+
+
+class EnNovelas : MainAPI() {
+
+    override var mainUrl = "https://l.ennovelas-tv.com"
+
+    override var name = "EnNovelas"
+
     override var lang = "es"
-    override val supportedTypes = setOf(TvType.TvSeries)
 
-    override val mainPage = mainPageOf(
-        "$mainUrl/category/telenovelas/" to "Telenovelas",
-        "$mainUrl/category/capitulos/" to "Capítulos recientes"
+    override val hasMainPage = true
+
+    override val hasChromecastSupport = true
+
+    override val hasDownloadSupport = true
+
+    override val supportedTypes = setOf(
+
+        TvType.TvSeries,
+
+        TvType.Movie
+
     )
 
-    // 🔎 SEARCH
-    override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get("$mainUrl/?s=$query").document
-        return document.select("article").mapNotNull { it.toSearchResult() }
-    }
 
-    // 🔎 QUICK SEARCH (arregla sugerencias)
-    override suspend fun quickSearch(query: String): List<SearchResponse> {
-        return search(query)
-    }
 
-    private fun Element.toSearchResult(): SearchResponse? {
-        val title = this.selectFirst("h2")?.text() ?: return null
-        val href = this.selectFirst("a")?.attr("href") ?: return null
-        val poster = this.selectFirst("img")?.attr("src")
+    override val mainPage = mainPageOf(
 
-        return newTvSeriesSearchResponse(title, href) {
-            this.posterUrl = poster
+        "$mainUrl/episodes" to "Últimos Capítulos",
+
+        "$mainUrl/series" to "Series",
+
+        "$mainUrl/movies" to "Películas"
+
+    )
+
+
+
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
+
+        val url = when (request.name) {
+
+            "Últimos Capítulos" -> "$mainUrl/episodes"
+
+            "Series" -> "$mainUrl/series"
+
+            "Películas" -> "$mainUrl/movies"
+
+            else -> "$mainUrl/episodes"
+
         }
-    }
 
-    // 🏠 HOMEPAGE
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = app.get("${request.data}/page/$page").document
-        val home = document.select("article").mapNotNull { it.toSearchResult() }
-        return newHomePageResponse(request.name, home)
-    }
 
-    // 📺 LOAD SERIES + EPISODES
-    override suspend fun load(url: String): LoadResponse? {
-        val document = app.get(url).document
 
-        val title = document.selectFirst("h1")?.text() ?: return null
-        val poster = document.selectFirst("img")?.attr("src")
-        val description = document.selectFirst("p")?.text()
+        val doc = app.get(url).document
 
-        val episodes = document.select("a[href*=\"/capitulo/\"]")
-            .distinctBy { it.attr("href") }
-            .mapIndexed { index, element ->
-                val epUrl = element.attr("href")
-                val epTitle = element.text()
+        val items = doc.select(".block-post").mapNotNull { element ->
 
-                newEpisode(epUrl) {
-                    name = epTitle
-                    episode = index + 1
+            val href = element.selectFirst("a")?.attr("href") ?: return@mapNotNull null
+
+            val title = element.selectFirst(".title")?.text()?.trim() ?: ""
+
+            var img = element.selectFirst("img")?.let { it.attr("data-img").ifEmpty { it.attr("src") } } ?: ""
+
+
+
+            if (img.contains("grey.gif") || img.isEmpty()) {
+
+                element.selectFirst(".imgSer")?.attr("data-img")?.let { bg ->
+
+                    img = bg.substringAfter("url(").substringBefore(")")
+
                 }
+
             }
+
+
+
+            newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+
+                this.posterUrl = fixUrlNull(img)
+
+            }
+
+        }
+
+
+
+        return newHomePageResponse(listOf(HomePageList(request.name, items)))
+
+    }
+
+
+
+    override suspend fun search(query: String): List<SearchResponse> {
+
+        val doc = app.get("$mainUrl/?s=$query").document
+
+        return doc.select(".block-post").mapNotNull { element ->
+
+            val href = element.selectFirst("a")?.attr("href") ?: return@mapNotNull null
+
+            val title = element.selectFirst(".title")?.text()?.trim() ?: ""
+
+            val img = element.selectFirst("img")?.let { it.attr("data-img").ifEmpty { it.attr("src") } } ?: ""
+
+
+
+            newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+
+                this.posterUrl = fixUrlNull(img)
+
+            }
+
+        }
+
+    }
+
+
+
+    override suspend fun load(url: String): LoadResponse? {
+
+        val doc = app.get(url).document
+
+
+
+        val title = doc.selectFirst("h1")?.ownText()?.trim() ?: return null
+
+        val description = doc.selectFirst(".postDesc, .post-entry, .story")?.text()?.trim() ?: ""
+
+        val poster = doc.selectFirst("img.imgLoaded, img[alt*='poster'], .poster img")?.attr("data-img")
+
+            ?.ifEmpty { doc.selectFirst("img")?.attr("src") } ?: ""
+
+
+
+        val isMovie = url.contains("/movies/") || url.contains("/pelicula/")
+
+        val type = if (isMovie) TvType.Movie else TvType.TvSeries
+
+
+
+        if (isMovie) {
+
+            return newMovieLoadResponse(title, url, TvType.Movie, url) {
+
+                this.posterUrl = fixUrlNull(poster)
+
+                this.plot = description
+
+            }
+
+        }
+
+
+
+        val episodes = doc.select("ul.eplist a.epNum").mapIndexed { idx, a ->
+
+            val epUrl = a.attr("href").let { if (it.startsWith("/")) mainUrl + it else it }
+
+            val epName = a.selectFirst("span")?.text()?.trim() ?: "Episodio ${idx + 1}"
+
+            newEpisode(epUrl) {
+
+                name = epName
+
+                episode = idx + 1
+
+                season = 1
+
+            }
+
+        }
+
+
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
-            posterUrl = poster
-            plot = description
+
+            this.posterUrl = fixUrlNull(poster)
+
+            this.plot = description
+
         }
+
     }
 
-    // 🎥 LOAD LINKS (VERSIÓN COMPATIBLE 2025)
+
+
     override suspend fun loadLinks(
+
         data: String,
+
         isCasting: Boolean,
+
         subtitleCallback: (SubtitleFile) -> Unit,
+
         callback: (ExtractorLink) -> Unit
-    ): Boolean {
 
-        val document = app.get(data).document
-        val html = document.html()
-        var success = false
+    ): Boolean = coroutineScope {
 
-        // 1️⃣ IFRAME DIRECTOS
-        document.select("iframe").forEach { iframe ->
-            val src = iframe.attr("src")
-            if (src.isNotBlank()) {
-                if (loadExtractor(fixUrl(src), data, subtitleCallback, callback)) {
-                    success = true
-                }
-            }
+        val doc: Document = app.get(data).document
+
+
+
+        // Buscar botón "Ver Capítulo" → redirección al blog/proxy
+
+        var proxyUrl: String? = doc.selectFirst("a[href*='a.poiw.online/enn.php?post=']")?.attr("href")
+
+
+
+        if (proxyUrl == null) {
+
+            val regexMatch = Regex("""https?://a\.poiw\.online/enn\.php\?post=([A-Za-z0-9+/=]+)""")
+
+                .find(doc.outerHtml())
+
+            proxyUrl = regexMatch?.value
+
         }
 
-        // 2️⃣ URLs OCULTAS EN SCRIPT
-        Regex("""https?://[^"' ]+""")
-            .findAll(html)
-            .map { it.value }
-            .distinct()
-            .forEach { url ->
-                if (
-                    url.contains("m3u8") ||
-                    url.contains("mp4") ||
-                    url.contains("dood") ||
-                    url.contains("stream") ||
-                    url.contains("filemoon")
-                ) {
-                    if (loadExtractor(url, data, subtitleCallback, callback)) {
-                        success = true
-                    }
-                }
+
+
+        if (proxyUrl.isNullOrBlank()) return@coroutineScope false
+
+
+
+        // Extraer base64 del post=
+
+        val base64Part = proxyUrl.substringAfter("post=").substringBefore("&").trim()
+
+
+
+        // Decodificar y parsear JSON
+
+        val servers: Map<String, String>? = try {
+
+            val decodedBytes = Base64.getDecoder().decode(base64Part)
+
+            val jsonStr = String(decodedBytes, Charsets.UTF_8)
+
+            Json.decodeFromString<Map<String, String>>(jsonStr)
+
+        } catch (e: Exception) {
+
+            null
+
+        }
+
+
+
+        if (servers.isNullOrEmpty()) return@coroutineScope false
+
+
+
+        // Limpieza de URLs (sustituciones como en Cuevana)
+
+        fun fixEmbed(url: String): String = url.replace("\\/", "/")
+
+            .replace("uqload.net", "uqload.to")
+
+            .replace("uqload.com", "uqload.to")
+
+            .replace("vidspeeds.com", "vidsspeeds.com")
+
+            .replace("vidhidepremium.com", "vidhidepro.com")
+
+            .replace("vidhide.com", "vidhidepro.com")
+
+
+
+        var foundAny = false
+
+
+
+        servers.forEach { (serverName, rawEmbed) ->
+
+            val embedUrl = fixEmbed(rawEmbed)
+
+
+
+            val displayName = when (serverName.lowercase()) {
+
+                "vk" -> "VK.com"
+
+                "vidsspeeds", "vidspeeds" -> "Vidspeeds"
+
+                "uqload" -> "Uqload"
+
+                else -> serverName.uppercase()
+
             }
 
-        // 3️⃣ M3U8 DIRECTO (SIN DEPRECATED)
-        Regex("""https?://[^"' ]+\.m3u8[^"' ]*""")
-            .findAll(html)
-            .forEach {
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = name,
-                        url = it.value,
-                        referer = data,
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = true
-                    )
+
+
+            // Resolver el embed con extractors internos de CloudStream
+
+            val resolved = loadExtractor(
+
+                url = embedUrl,
+
+                referer = data,  // Referer = página del capítulo
+
+                subtitleCallback = subtitleCallback,
+
+                callback = callback
+
+            )
+
+
+
+            if (resolved) foundAny = true
+
+
+
+            // Fallback: enviar el embed directo si no se resuelve automáticamente
+
+            if (!resolved) {
+
+                val link = newExtractorLink(
+
+                    source = displayName,
+
+                    name = "$displayName - $serverName (directo)",
+
+                    url = embedUrl
+
                 )
-                success = true
+
+                link.referer = data
+
+                link.quality = Qualities.Unknown.value
+
+                callback(link)
+
+                foundAny = true
+
             }
 
-        return success
+        }
+
+
+
+        return@coroutineScope foundAny
+
     }
+
+
+
+    companion object {
+
+        const val PREFIX_SEARCH = "id:"
+
+    }
+
 }
