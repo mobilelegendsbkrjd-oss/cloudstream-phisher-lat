@@ -30,71 +30,70 @@ class LatinLuchas : MainAPI() {
     // 🏠 HOMEPAGE
     // ==========================================
     override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse? {
+    page: Int,
+    request: MainPageRequest
+): HomePageResponse? {
 
-        val categories = listOf(
-            Pair("En Vivo Hoy", "$mainUrl/en-vivo/"),
-            Pair("WWE", "$mainUrl/category/eventos/wwe/"),
-            Pair("UFC", "$mainUrl/category/eventos/ufc/"),
-            Pair("AEW", "$mainUrl/category/eventos/aew/"),
-            Pair("Lucha Libre Mexicana", "$mainUrl/category/eventos/lucha-libre-mexicana/"),
-            Pair("Indies", "$mainUrl/category/eventos/indies/")
-        )
+    val categories = listOf(
+        Pair("En Vivo Hoy", "$mainUrl/en-vivo/"),
+        Pair("WWE", "$mainUrl/category/eventos/wwe/"),
+        Pair("UFC", "$mainUrl/category/eventos/ufc/"),
+        Pair("AEW", "$mainUrl/category/eventos/aew/"),
+        Pair("Lucha Libre Mexicana", "$mainUrl/category/eventos/lucha-libre-mexicana/"),
+        Pair("Indies", "$mainUrl/category/eventos/indies/")
+    )
 
-        val homePages = categories.map { (sectionName, url) ->
+    val homePages = categories.map { (sectionName, url) ->
 
-            val doc = app.get(url).document
+        val doc = app.get(url).document
+        val html = doc.html()
 
-            val items = if (url.contains("/en-vivo/")) {
+        val items: List<SearchResponse> = if (url.contains("/en-vivo/")) {
 
-                // 🔥 Extraemos los enlaces del script JS
-                val html = doc.html()
-                val regex = Regex("""href="(https://latinluchas\.com/[^"]+)"""")
+            val regex = Regex("""href="(https://latinluchas\.com/[^"]+)"""")
 
-                regex.findAll(html).map { match ->
-                    val link = match.groupValues[1]
+            regex.findAll(html).mapNotNull { match ->
+                val link = match.groupValues.getOrNull(1) ?: return@mapNotNull null
 
-                    newAnimeSearchResponse(
-                        link.substringAfter("latinluchas.com/")
-                            .replace("-", " ")
-                            .uppercase(),
-                        link,
-                        TvType.TvSeries
-                    ) {
-                        this.posterUrl = defaultPoster
+                newAnimeSearchResponse(
+                    link.substringAfter("latinluchas.com/")
+                        .replace("-", " ")
+                        .uppercase(),
+                    link,
+                    TvType.TvSeries
+                ) {
+                    this.posterUrl = defaultPoster
+                }
+            }.distinctBy { it.url }
+
+        } else {
+
+            doc.select("article, .post, .elementor-post")
+                .mapNotNull { element ->
+                    val title = element.selectFirst("h2, h3, .entry-title")
+                        ?.text()?.trim()
+                        ?: return@mapNotNull null
+
+                    val href = element.selectFirst("a")
+                        ?.attr("abs:href")
+                        ?: return@mapNotNull null
+
+                    val poster =
+                        element.selectFirst("img")?.attr("abs:src")
+                            ?: element.selectFirst("img")?.attr("abs:data-src")
+                            ?: defaultPoster
+
+                    newAnimeSearchResponse(title, href, TvType.TvSeries) {
+                        this.posterUrl = poster
                     }
-                }.distinctBy { it.url }
-
-            } else {
-
-                doc.select("article, .post, .elementor-post")
-                    .mapNotNull { element ->
-                        val title = element.selectFirst("h2, h3, .entry-title")
-                            ?.text()?.trim()
-                            ?: return@mapNotNull null
-
-                        val href = element.selectFirst("a")
-                            ?.attr("abs:href")
-                            ?: return@mapNotNull null
-
-                        val poster =
-                            element.selectFirst("img")?.attr("abs:src")
-                                ?: element.selectFirst("img")?.attr("abs:data-src")
-                                ?: defaultPoster
-
-                        newAnimeSearchResponse(title, href, TvType.TvSeries) {
-                            this.posterUrl = poster
-                        }
-                    }
-            }
-
-            HomePageList(sectionName, items)
+                }
         }
 
-        return newHomePageResponse(homePages)
+        HomePageList(sectionName, items)
     }
+
+    return newHomePageResponse(homePages)
+}
 
     // ==========================================
     // 📄 LOAD (REPETICIONES + EN VIVO)
