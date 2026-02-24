@@ -1,0 +1,77 @@
+name: Build Cloudstream Extension (DEX)
+
+on:
+  workflow_dispatch:
+    inputs:
+      extension_folder:
+        description: 'Nombre de la carpeta de la extensión'
+        required: true
+        default: 'IPTVPlayer'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Grant execute permission
+        run: chmod +x gradlew
+
+      - name: Setup Android SDK & Licenses
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME --licenses || true
+
+      - name: Build extension
+        run: ./gradlew ":${{ github.event.inputs.extension_folder }}:assembleRelease"
+
+      - name: Install Tools (d8)
+        run: |
+          sudo apt update
+          sudo apt install -y unzip wget
+          # Descargamos build-tools para tener d8 estable
+          wget https://dl.google.com/android/repository/build-tools_r33.0.2-linux.zip
+          unzip -q build-tools_r33.0.2-linux.zip -d build-tools-dir
+          # Localizamos d8 y lo hacemos ejecutable
+          find build-tools-dir -name "d8" -exec chmod +x {} \;
+
+      - name: Convert AAR to DEX
+        run: |
+          mkdir -p output
+          # Buscar el AAR
+          AAR=$(find "${{ github.event.inputs.extension_folder }}" -name "*.aar" | head -n 1)
+          if [ -z "$AAR" ]; then
+            echo "Error: No se encontró el AAR"
+            exit 1
+          fi
+          echo "AAR encontrado: $AAR"
+
+          # Extraer classes.jar del AAR
+          unzip -q "$AAR" "classes.jar" -d temp_aar
+
+          # Encontrar la ruta de d8 (dentro de la carpeta descomprimida)
+          D8_PATH=$(find build-tools-dir -name "d8" | head -n 1)
+          
+          # Convertir JAR a DEX directamente
+          $D8_PATH temp_aar/classes.jar --output output/
+          
+          if [ -f "output/classes.dex" ]; then
+             echo "Éxito: classes.dex generado."
+          else
+             echo "Error: Falló la generación del DEX."
+             exit 1
+          fi
+
+      - name: Upload DEX Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.inputs.extension_folder }}-dex
+          path: output/classes.dex
