@@ -332,5 +332,3 @@ class Tlnovelas : MainAPI() {
     data class DecryptedPlayback(val sources: List<DecryptedSource>?)
     data class DecryptedSource(val url: String?)
 }
-
-lo estoy intentando de esta manera. esta bien o como ves?
