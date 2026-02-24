@@ -80,42 +80,22 @@ class LatinLuchas : MainAPI() {
     // LOAD (EVENTO INDIVIDUAL)
     // =============================
     override suspend fun load(url: String): LoadResponse? {
-
         val document = app.get(url).document
+        val title = document.selectFirst("h1.entry-title")?.text()?.trim() ?: "Evento"
+        val poster = document.selectFirst("meta[property='og:image']")?.attr("content") ?: defaultPoster
 
-        val title = document
-            .selectFirst("h1.entry-title")
-            ?.text()?.trim() ?: "Evento"
-
-        val poster = document
-            .selectFirst("meta[property='og:image']")
-            ?.attr("content") ?: defaultPoster
-
-        val plot = document
-            .selectFirst("meta[property='og:description']")
-            ?.attr("content")
-
-        // 🔥 EXTRAEMOS TODAS LAS OPCIONES VISIBLES
-        val episodes = document
-            .select("a.watch-button, .replay-options a, .accordion-content a")
-            .mapNotNull { anchor ->
-
-                val link = anchor.attr("abs:href")
-                val name = anchor.text().trim()
-
-                if (link.isBlank()) return@mapNotNull null
-                if (link.contains("descargar", true)) return@mapNotNull null
-
-                newEpisode(link) {
-                    this.name = name.ifBlank { "VER OPCIÓN" }
-                }
-            }
-            .distinctBy { it.data }
+        val episodes = document.select("a.watch-button, .replay-options a, .accordion-content a").mapNotNull { anchor ->
+            val name = anchor.text().trim()
+            val link = anchor.attr("abs:href")
+            
+            val isVideoLink = name.contains(Regex("CANAL|OPCIÓ|ENGLISH|PELEA|MAIN|PRELIM", RegexOption.IGNORE_CASE))
+            
+            if (!isVideoLink || link.contains("descargar", true) || link.isNullOrBlank()) null 
+            else newEpisode(link) { this.name = name }
+        }.distinctBy { it.data }
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
             this.posterUrl = poster
-            this.plot = plot
-            this.tags = listOf("Lucha Libre", "Wrestling", "Deportes")
         }
     }
 
