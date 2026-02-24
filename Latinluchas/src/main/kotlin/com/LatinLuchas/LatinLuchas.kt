@@ -4,13 +4,17 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.extractors.VidStack
 
-// ===== EXTRACTOR PARA UPNS =====
+// =============================
+// EXTRACTOR PARA UPNS
+// =============================
 class LatinLuchaUpns : VidStack() {
     override var name = "LatinLucha Upns"
     override var mainUrl = "https://latinlucha.upns.online"
 }
 
-// ===== API PRINCIPAL =====
+// =============================
+// API PRINCIPAL
+// =============================
 class LatinLuchas : MainAPI() {
 
     override var mainUrl = "https://latinluchas.com"
@@ -22,7 +26,9 @@ class LatinLuchas : MainAPI() {
     private val defaultPoster =
         "https://tv.latinluchas.com/tv/wp-content/uploads/2026/02/hq720.avif"
 
-    // ================= HOME =================
+    // =============================
+    // HOMEPAGE (CATEGORÍAS)
+    // =============================
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
@@ -37,25 +43,32 @@ class LatinLuchas : MainAPI() {
         )
 
         val homePages = categories.map { (catName, url) ->
+
             val doc = app.get(url).document
 
-            val items = doc.select("article, .post, .elementor-post").mapNotNull { element ->
-                val title = element.selectFirst("h2, h3, .entry-title")
-                    ?.text()?.trim() ?: return@mapNotNull null
+            val items = doc
+                .select("article, .post, .elementor-post")
+                .mapNotNull { element ->
 
-                val href = element.selectFirst("a")
-                    ?.attr("abs:href") ?: return@mapNotNull null
+                    val title = element
+                        .selectFirst("h2, h3, .entry-title")
+                        ?.text()?.trim() ?: return@mapNotNull null
 
-                val poster = element.selectFirst("img")
-                    ?.attr("abs:src")
-                    ?: element.selectFirst("img")
-                        ?.attr("abs:data-src")
-                    ?: defaultPoster
+                    val href = element
+                        .selectFirst("a")
+                        ?.attr("abs:href") ?: return@mapNotNull null
 
-                newAnimeSearchResponse(title, href, TvType.TvSeries) {
-                    this.posterUrl = poster
+                    val poster = element
+                        .selectFirst("img")
+                        ?.attr("abs:src")
+                        ?: element.selectFirst("img")
+                            ?.attr("abs:data-src")
+                        ?: defaultPoster
+
+                    newAnimeSearchResponse(title, href, TvType.TvSeries) {
+                        this.posterUrl = poster
+                    }
                 }
-            }
 
             HomePageList(catName, items)
         }
@@ -63,62 +76,40 @@ class LatinLuchas : MainAPI() {
         return newHomePageResponse(homePages)
     }
 
-    // ================= LOAD (FILTRADO REAL DEL ACORDEÓN) =================
+    // =============================
+    // LOAD (EVENTO INDIVIDUAL)
+    // =============================
     override suspend fun load(url: String): LoadResponse? {
 
         val document = app.get(url).document
 
-        val title = document.selectFirst("h1.entry-title")
-            ?.text()?.trim() ?: return null
+        val title = document
+            .selectFirst("h1.entry-title")
+            ?.text()?.trim() ?: "Evento"
 
-        val poster = document.selectFirst("meta[property='og:image']")
+        val poster = document
+            .selectFirst("meta[property='og:image']")
             ?.attr("content") ?: defaultPoster
 
-        val plot = document.selectFirst("meta[property='og:description']")
+        val plot = document
+            .selectFirst("meta[property='og:description']")
             ?.attr("content")
 
-        // ---- NORMALIZAMOS EL TÍTULO PARA COMPARAR ----
-        val normalizedTitle = title
-            .lowercase()
-            .replace(Regex("\\d{1,2} de .*? \\d{4}"), "")
-            .replace("en vivo", "")
-            .replace("y repetición", "")
-            .replace("repeticion", "")
-            .trim()
-
-        // Tomamos solo la palabra clave principal (RAW, NXT, UFC, etc.)
-        val keyword = normalizedTitle
-            .split(" ")
-            .firstOrNull()
-            ?.trim() ?: ""
-
-        // ---- FILTRAMOS SOLO EL ACORDEÓN CORRECTO ----
+        // 🔥 EXTRAEMOS TODAS LAS OPCIONES VISIBLES
         val episodes = document
-            .select(".accordion")
-            .mapNotNull { accordion ->
+            .select("a.watch-button, .replay-options a, .accordion-content a")
+            .mapNotNull { anchor ->
 
-                val headerText = accordion
-                    .selectFirst(".accordion-header h3")
-                    ?.text()
-                    ?.lowercase()
-                    ?: return@mapNotNull null
+                val link = anchor.attr("abs:href")
+                val name = anchor.text().trim()
 
-                if (!headerText.contains(keyword)) return@mapNotNull null
+                if (link.isBlank()) return@mapNotNull null
+                if (link.contains("descargar", true)) return@mapNotNull null
 
-                accordion
-                    .select(".accordion-content a")
-                    .mapNotNull { anchor ->
-
-                        val link = anchor.attr("abs:href")
-                        val name = anchor.text().trim()
-
-                        if (link.isBlank()) null
-                        else newEpisode(link) {
-                            this.name = name
-                        }
-                    }
+                newEpisode(link) {
+                    this.name = name.ifBlank { "VER OPCIÓN" }
+                }
             }
-            .flatten()
             .distinctBy { it.data }
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
@@ -128,7 +119,9 @@ class LatinLuchas : MainAPI() {
         }
     }
 
-    // ================= LOAD LINKS =================
+    // =============================
+    // LOAD LINKS (REPRODUCTORES)
+    // =============================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -154,7 +147,6 @@ class LatinLuchas : MainAPI() {
                 src.contains("upns.online") -> {
                     LatinLuchaUpns().getUrl(src, data, subtitleCallback, callback)
                 }
-
                 else -> {
                     loadExtractor(src, data, subtitleCallback, callback)
                 }
