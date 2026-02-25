@@ -2,42 +2,33 @@ package com.latinluchas
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.extractors.FilemoonV2
 import com.lagradost.cloudstream3.extractors.VidStack
 
-// =========================
-// Extractor UPNS
-// =========================
+// ==============================
+// Extractor para UPNS
+// ==============================
 class LatinLuchaUpns : VidStack() {
     override var name = "LatinLucha Server"
     override var mainUrl = "https://latinlucha.online"
 }
 
-// =========================
-// Extractor BYSEKOZE (Filemoon backend)
-// =========================
-class Bysekoze : FilemoonV2() {
-    override var name = "Bysekoze"
-    override var mainUrl = "https://bysekoze.com"
-}
-
-// =========================
+// ==============================
 // MAIN API
-// =========================
+// ==============================
 class LatinLuchas : MainAPI() {
 
     override var mainUrl = "https://latinluchas.com"
     override var name = "LatinLuchas"
     override var lang = "es"
     override val hasMainPage = true
-    override val supportedTypes = setOf(TvType.TvSeries)
+    override val supportedTypes = setOf(TvType.Movie)
 
     private val defaultPoster =
         "https://tv.latinluchas.com/tv/wp-content/uploads/2026/02/hq720.avif"
 
-    // =========================
+    // ==============================
     // HOMEPAGE
-    // =========================
+    // ==============================
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
@@ -51,29 +42,26 @@ class LatinLuchas : MainAPI() {
             Pair("Indies", "$mainUrl/category/eventos/indies/")
         )
 
-        val homePages = categories.map { (title, url) ->
+        val home = categories.map { (title, url) ->
+
             val doc = app.get(url).document
 
             val items = doc.select("article, .post, .elementor-post")
                 .mapNotNull { element ->
 
-                    val name = element
-                        .selectFirst("h2, h3, .entry-title")
-                        ?.text()
-                        ?.trim()
-                        ?: return@mapNotNull null
+                    val name = element.selectFirst("h2, h3, .entry-title")
+                        ?.text()?.trim() ?: return@mapNotNull null
 
-                    val href = element
-                        .selectFirst("a")
-                        ?.attr("abs:href")
-                        ?: return@mapNotNull null
+                    val href = element.selectFirst("a")
+                        ?.attr("abs:href") ?: return@mapNotNull null
 
-                    val poster = element
-                        .selectFirst("img")
+                    val poster = element.selectFirst("img")
                         ?.attr("abs:src")
+                        ?: element.selectFirst("img")
+                            ?.attr("abs:data-src")
                         ?: defaultPoster
 
-                    newAnimeSearchResponse(name, href, TvType.TvSeries) {
+                    newMovieSearchResponse(name, href, TvType.Movie) {
                         this.posterUrl = poster
                     }
                 }
@@ -81,60 +69,34 @@ class LatinLuchas : MainAPI() {
             HomePageList(title, items)
         }
 
-        return newHomePageResponse(homePages)
+        return newHomePageResponse(home)
     }
 
-    // =========================
-    // LOAD EVENT
-    // =========================
+    // ==============================
+    // LOAD EVENT PAGE
+    // ==============================
     override suspend fun load(url: String): LoadResponse? {
 
         val document = app.get(url).document
 
-        val title = document
-            .selectFirst("h1.entry-title")
-            ?.text()
-            ?.trim()
-            ?: "Evento"
+        val title = document.selectFirst("h1.entry-title")
+            ?.text()?.trim() ?: "Evento"
 
-        val poster = document
-            .selectFirst("meta[property='og:image']")
-            ?.attr("content")
-            ?: defaultPoster
+        val poster = document.selectFirst("meta[property='og:image']")
+            ?.attr("content") ?: defaultPoster
 
-        val plot = document
-            .selectFirst("meta[property='og:description']")
+        val plot = document.selectFirst("meta[property='og:description']")
             ?.attr("content")
 
-        val episodes = document
-            .select("a.btn-video")
-            .mapNotNull { anchor ->
-
-                val name = anchor.text().trim()
-                val link = anchor.attr("abs:href")
-
-                if (link.isBlank() || name.contains("DESCARGA", true))
-                    null
-                else
-                    newEpisode(link) {
-                        this.name = name
-                    }
-            }
-
-        return newTvSeriesLoadResponse(
-            title,
-            url,
-            TvType.TvSeries,
-            episodes
-        ) {
+        return newMovieLoadResponse(title, url, TvType.Movie, url) {
             this.posterUrl = poster
             this.plot = plot
         }
     }
 
-    // =========================
+    // ==============================
     // LOAD LINKS
-    // =========================
+    // ==============================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -144,33 +106,55 @@ class LatinLuchas : MainAPI() {
 
         val document = app.get(data).document
 
-        document.select("iframe").forEach { iframe ->
+        // SOLO buscamos botones reales del evento
+        document.select("a.btn-video").forEach { anchor ->
 
-            var src = iframe.attr("abs:src")
-                .ifBlank { iframe.attr("abs:data-src") }
-                .ifBlank { iframe.attr("src") }
+            val link = anchor.attr("abs:href")
+            if (link.isBlank()) return@forEach
 
-            if (src.isBlank()) return@forEach
-            if (src.startsWith("//")) src = "https:$src"
+            val playerDoc = app.get(link).document
 
-            if (src.contains(
-                    Regex("facebook|google|ads|twitter|instagram", RegexOption.IGNORE_CASE)
-                )
-            ) return@forEach
+            playerDoc.select("iframe").forEach { iframe ->
 
-            when {
+                var src = iframe.attr("abs:src")
+                    .ifBlank { iframe.attr("abs:data-src") }
+                    .ifBlank { iframe.attr("src") }
 
-                // BYSEKOZE (Filemoon backend)
-                src.contains("bysekoze.com") ->
-                    Bysekoze().getUrl(src, data, subtitleCallback, callback)
+                if (src.isBlank()) return@forEach
 
-                // UPNS
-                src.contains("upns.online") || src.contains("latinlucha.online") ->
-                    LatinLuchaUpns().getUrl(src, data, subtitleCallback, callback)
+                if (src.startsWith("//")) {
+                    src = "https:$src"
+                }
 
-                // Otros (OK.ru, etc)
-                else ->
-                    loadExtractor(src, data, subtitleCallback, callback)
+                // Filtro anti basura
+                if (src.contains(
+                        Regex("facebook|google|ads|twitter|instagram", RegexOption.IGNORE_CASE)
+                    )
+                ) return@forEach
+
+                when {
+
+                    // ==============================
+                    // BYSEKOZE
+                    // ==============================
+                    src.contains("bysekoze.com") -> {
+                        Bysekoze().getUrl(src, link, subtitleCallback, callback)
+                    }
+
+                    // ==============================
+                    // UPNS
+                    // ==============================
+                    src.contains("upns") -> {
+                        LatinLuchaUpns().getUrl(src, link, subtitleCallback, callback)
+                    }
+
+                    // ==============================
+                    // OTROS SERVIDORES
+                    // ==============================
+                    else -> {
+                        loadExtractor(src, link, subtitleCallback, callback)
+                    }
+                }
             }
         }
 
