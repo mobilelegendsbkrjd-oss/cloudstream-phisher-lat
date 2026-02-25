@@ -3,18 +3,99 @@ package com.latinluchas
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.extractors.VidStack
+import org.json.JSONObject
 
-// ==============================
-// Extractor para UPNS
-// ==============================
-class LatinLuchaUpns : VidStack() {
-    override var name = "LatinLucha Server"
-    override var mainUrl = "https://latinlucha.online"
+// ===============================
+// Extractor Bysekoze Integrado
+// ===============================
+class Bysekoze : ExtractorApi() {
+
+    override var name = "Bysekoze"
+    override var mainUrl = "https://bysekoze.com"
+    override val requiresReferer = true
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+
+        val headers = mapOf(
+            "Referer" to (referer ?: mainUrl),
+            "User-Agent" to USER_AGENT
+        )
+
+        try {
+            val id = Regex("/e/([a-zA-Z0-9]+)")
+                .find(url)?.groupValues?.getOrNull(1)
+
+            if (!id.isNullOrEmpty()) {
+                val apiUrl = "$mainUrl/api/videos/$id/embed/playback"
+                val response = app.get(apiUrl, headers = headers).text
+                val json = JSONObject(response)
+
+                if (json.has("sources")) {
+                    val sources = json.getJSONArray("sources")
+
+                    for (i in 0 until sources.length()) {
+                        val obj = sources.getJSONObject(i)
+                        val link = obj.getString("url")
+
+                        callback.invoke(
+                            newExtractorLink(
+                                name,
+                                name,
+                                link
+                            ) {
+                                this.referer = mainUrl
+                                this.isM3u8 = link.contains(".m3u8")
+                                this.quality = Qualities.Unknown.value
+                            }
+                        )
+                    }
+                    return
+                }
+            }
+        } catch (_: Exception) {
+        }
+
+        // Fallback antiguo
+        try {
+            val document = app.get(url, headers = headers).document
+            val packedScript = document
+                .selectFirst("script:containsData(function(p,a,c,k,e,d))")
+                ?.data()
+                .orEmpty()
+
+            JsUnpacker(packedScript).unpack()?.let { unpacked ->
+                Regex("""sources:\[\{file:"(.*?)"""")
+                    .find(unpacked)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.let { link ->
+
+                        callback.invoke(
+                            newExtractorLink(
+                                name,
+                                name,
+                                link
+                            ) {
+                                this.referer = url
+                                this.isM3u8 = link.contains(".m3u8")
+                                this.quality = Qualities.Unknown.value
+                            }
+                        )
+                    }
+            }
+        } catch (_: Exception) {
+        }
+    }
 }
 
-// ==============================
-// MAIN API
-// ==============================
+// ===============================
+// MAIN EXTENSION
+// ===============================
 class LatinLuchas : MainAPI() {
 
     override var mainUrl = "https://latinluchas.com"
@@ -26,9 +107,6 @@ class LatinLuchas : MainAPI() {
     private val defaultPoster =
         "https://tv.latinluchas.com/tv/wp-content/uploads/2026/02/hq720.avif"
 
-    // ==============================
-    // HOMEPAGE
-    // ==============================
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
@@ -42,61 +120,66 @@ class LatinLuchas : MainAPI() {
             Pair("Indies", "$mainUrl/category/eventos/indies/")
         )
 
-        val home = categories.map { (title, url) ->
+        val home = categories.map { (catName, url) ->
 
             val doc = app.get(url).document
 
             val items = doc.select("article, .post, .elementor-post")
                 .mapNotNull { element ->
 
-                    val name = element.selectFirst("h2, h3, .entry-title")
-                        ?.text()?.trim() ?: return@mapNotNull null
+                    val title = element
+                        .selectFirst("h2, h3, .entry-title")
+                        ?.text()?.trim()
+                        ?: return@mapNotNull null
 
-                    val href = element.selectFirst("a")
-                        ?.attr("abs:href") ?: return@mapNotNull null
+                    val href = element
+                        .selectFirst("a")
+                        ?.attr("abs:href")
+                        ?: return@mapNotNull null
 
-                    val poster = element.selectFirst("img")
+                    val poster = element
+                        .selectFirst("img")
                         ?.attr("abs:src")
-                        ?: element.selectFirst("img")
-                            ?.attr("abs:data-src")
                         ?: defaultPoster
 
-                    newMovieSearchResponse(name, href, TvType.Movie) {
+                    newMovieSearchResponse(title, href, TvType.Movie) {
                         this.posterUrl = poster
                     }
                 }
 
-            HomePageList(title, items)
+            HomePageList(catName, items)
         }
 
         return newHomePageResponse(home)
     }
 
-    // ==============================
-    // LOAD EVENT PAGE
-    // ==============================
     override suspend fun load(url: String): LoadResponse? {
 
         val document = app.get(url).document
 
-        val title = document.selectFirst("h1.entry-title")
-            ?.text()?.trim() ?: "Evento"
+        val title = document
+            .selectFirst("h1.entry-title")
+            ?.text()?.trim()
+            ?: "Evento"
 
-        val poster = document.selectFirst("meta[property='og:image']")
-            ?.attr("content") ?: defaultPoster
+        val poster =
+            document.selectFirst("meta[property=og:image]")
+                ?.attr("content")
+                ?: defaultPoster
 
-        val plot = document.selectFirst("meta[property='og:description']")
-            ?.attr("content")
-
-        return newMovieLoadResponse(title, url, TvType.Movie, url) {
+        return newMovieLoadResponse(
+            title,
+            url,
+            TvType.Movie,
+            url
+        ) {
             this.posterUrl = poster
-            this.plot = plot
+            this.plot =
+                document.selectFirst("meta[property=og:description]")
+                    ?.attr("content")
         }
     }
 
-    // ==============================
-    // LOAD LINKS
-    // ==============================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -106,54 +189,32 @@ class LatinLuchas : MainAPI() {
 
         val document = app.get(data).document
 
-        // SOLO buscamos botones reales del evento
-        document.select("a.btn-video").forEach { anchor ->
+        document.select("iframe").forEach { iframe ->
 
-            val link = anchor.attr("abs:href")
-            if (link.isBlank()) return@forEach
+            var src = iframe.attr("abs:src")
+                .ifBlank { iframe.attr("abs:data-src") }
+                .ifBlank { iframe.attr("src") }
 
-            val playerDoc = app.get(link).document
+            if (src.isBlank()) return@forEach
+            if (src.startsWith("//")) src = "https:$src"
 
-            playerDoc.select("iframe").forEach { iframe ->
+            if (src.contains(
+                    Regex("facebook|google|ads|twitter|instagram",
+                        RegexOption.IGNORE_CASE)
+                )
+            ) return@forEach
 
-                var src = iframe.attr("abs:src")
-                    .ifBlank { iframe.attr("abs:data-src") }
-                    .ifBlank { iframe.attr("src") }
-
-                if (src.isBlank()) return@forEach
-
-                if (src.startsWith("//")) {
-                    src = "https:$src"
+            when {
+                src.contains("bysekoze.com") -> {
+                    Bysekoze().getUrl(src, data, subtitleCallback, callback)
                 }
 
-                // Filtro anti basura
-                if (src.contains(
-                        Regex("facebook|google|ads|twitter|instagram", RegexOption.IGNORE_CASE)
-                    )
-                ) return@forEach
+                src.contains("upns.online") -> {
+                    VidStack().getUrl(src, data, subtitleCallback, callback)
+                }
 
-                when {
-
-                    // ==============================
-                    // BYSEKOZE
-                    // ==============================
-                    src.contains("bysekoze.com") -> {
-                        Bysekoze().getUrl(src, link, subtitleCallback, callback)
-                    }
-
-                    // ==============================
-                    // UPNS
-                    // ==============================
-                    src.contains("upns") -> {
-                        LatinLuchaUpns().getUrl(src, link, subtitleCallback, callback)
-                    }
-
-                    // ==============================
-                    // OTROS SERVIDORES
-                    // ==============================
-                    else -> {
-                        loadExtractor(src, link, subtitleCallback, callback)
-                    }
+                else -> {
+                    loadExtractor(src, data, subtitleCallback, callback)
                 }
             }
         }
