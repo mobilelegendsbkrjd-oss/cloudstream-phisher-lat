@@ -1,5 +1,4 @@
-
-package com.latinluchas // O tu paquete correspondiente
+package com.latinluchas
 
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
@@ -7,6 +6,8 @@ import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.JsUnpacker
+import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.newExtractorLink
 import org.json.JSONObject
 
 class Bysekoze : ExtractorApi() {
@@ -27,10 +28,9 @@ class Bysekoze : ExtractorApi() {
         )
 
         // ==============================
-        // MÉTODO 1 — API MODERNA (Intento capturar ID más flexible)
+        // MÉTODO 1 — API MODERNA
         // ==============================
         try {
-            // Regex ajustada por si la URL trae /v/, /e/ o termina en .html
             val id = Regex("/(?:e|v)/([a-zA-Z0-9]+)")
                 .find(url)?.groupValues?.getOrNull(1)
 
@@ -46,17 +46,17 @@ class Bysekoze : ExtractorApi() {
                         val link = obj.getString("url")
 
                         callback.invoke(
-                            ExtractorLink(
-                                source = name,
-                                name = name,
-                                url = link,
-                                referer = url, // Usamos la URL del iframe como referer, es más seguro
-                                quality = Qualities.Unknown.value,
-                                isM3u8 = link.contains(".m3u8")
+                            newExtractorLink(
+                                name,
+                                name,
+                                link,
+                                url, // referer
+                                Qualities.Unknown.value,
+                                link.contains(".m3u8")
                             )
                         )
                     }
-                    return // Si funcionó la API, terminamos aquí
+                    return
                 }
             }
         } catch (_: Exception) { }
@@ -73,20 +73,19 @@ class Bysekoze : ExtractorApi() {
 
             if (packedScript.isNotEmpty()) {
                 JsUnpacker(packedScript).unpack()?.let { unpacked ->
-                    // Regex más simple para el link
                     Regex("""file\s*:\s*["'](.*?)["']""")
                         .find(unpacked)
                         ?.groupValues
                         ?.getOrNull(1)
                         ?.let { link ->
                             callback.invoke(
-                                ExtractorLink(
-                                    source = name,
-                                    name = name,
-                                    url = link,
-                                    referer = url,
-                                    quality = Qualities.Unknown.value,
-                                    isM3u8 = link.contains(".m3u8")
+                                newExtractorLink(
+                                    name,
+                                    name,
+                                    link,
+                                    url, // referer
+                                    Qualities.Unknown.value,
+                                    link.contains(".m3u8")
                                 )
                             )
                         }
