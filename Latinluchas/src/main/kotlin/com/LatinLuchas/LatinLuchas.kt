@@ -10,8 +10,8 @@ import org.json.JSONObject
 // ===============================
 class Bysekoze : ExtractorApi() {
 
-    override val name = "Bysekoze"
-    override val mainUrl = "https://bysekoze.com"
+    override var name = "Bysekoze"
+    override var mainUrl = "https://bysekoze.com"
     override val requiresReferer = true
 
     override suspend fun getUrl(
@@ -60,21 +60,20 @@ class Bysekoze : ExtractorApi() {
         } catch (_: Exception) {
         }
 
-        // Fallback antiguo
+        // fallback antiguo (packer)
         try {
             val document = app.get(url, headers = headers).document
-            val packedScript = document
+            val packed = document
                 .selectFirst("script:containsData(function(p,a,c,k,e,d))")
                 ?.data()
                 .orEmpty()
 
-            JsUnpacker(packedScript).unpack()?.let { unpacked ->
+            JsUnpacker(packed).unpack()?.let { unpacked ->
                 Regex("""sources:\[\{file:"(.*?)"""")
                     .find(unpacked)
                     ?.groupValues
                     ?.getOrNull(1)
                     ?.let { link ->
-
                         callback.invoke(
                             newExtractorLink(
                                 name,
@@ -94,13 +93,13 @@ class Bysekoze : ExtractorApi() {
 }
 
 // ===============================
-// MAIN EXTENSION
+// MAIN
 // ===============================
 class LatinLuchas : MainAPI() {
 
-    override val mainUrl = "https://latinluchas.com"
-    override val name = "LatinLuchas"
-    override val lang = "es"
+    override var mainUrl = "https://latinluchas.com"
+    override var name = "LatinLuchas"
+    override var lang = "es"
     override val hasMainPage = true
     override val supportedTypes = setOf(TvType.Movie)
 
@@ -205,7 +204,7 @@ class LatinLuchas : MainAPI() {
             ) return@forEach
 
             when {
-                src.contains("bysekoze.com") -> {
+                src.contains("bysekoze") -> {
                     Bysekoze().getUrl(src, data, subtitleCallback, callback)
                 }
 
