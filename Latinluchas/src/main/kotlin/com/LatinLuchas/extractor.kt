@@ -2,18 +2,12 @@ package com.latinluchas
 
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.utils.ExtractorApi
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.JsUnpacker
-import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.newExtractorLink
+import com.lagradost.cloudstream3.utils.*
 import org.json.JSONObject
 
 class Bysekoze : ExtractorApi() {
 
     override var name = "Bysekoze"
-    override var mainUrl = "https://bysekoze.com"
     override val requiresReferer = true
 
     override suspend fun getUrl(
@@ -22,20 +16,22 @@ class Bysekoze : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+
         val headers = mapOf(
-            "Referer" to (referer ?: mainUrl),
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "Referer" to (referer ?: url),
+            "User-Agent" to "Mozilla/5.0"
         )
 
-        // ==============================
-        // MÉTODO 1 — API MODERNA
-        // ==============================
-        try {
-            val id = Regex("/(?:e|v)/([a-zA-Z0-9]+)")
-                .find(url)?.groupValues?.getOrNull(1)
+        val host = url.substringBefore("/e/")
+        val id = Regex("/(?:e|v)/([a-zA-Z0-9]+)")
+            .find(url)?.groupValues?.getOrNull(1)
 
+        // ======================
+        // MÉTODO 1 — API DIRECTA
+        // ======================
+        try {
             if (!id.isNullOrEmpty()) {
-                val apiUrl = "$mainUrl/api/videos/$id/embed/playback"
+                val apiUrl = "$host/api/videos/$id/embed/playback"
                 val response = app.get(apiUrl, headers = headers).text
                 val json = JSONObject(response)
 
@@ -50,7 +46,7 @@ class Bysekoze : ExtractorApi() {
                                 name,
                                 name,
                                 link,
-                                url, // referer
+                                url,
                                 Qualities.Unknown.value,
                                 link.contains(".m3u8")
                             )
@@ -59,20 +55,20 @@ class Bysekoze : ExtractorApi() {
                     return
                 }
             }
-        } catch (_: Exception) { }
+        } catch (_: Exception) {}
 
-        // ==============================
-        // MÉTODO 2 — FALLBACK JSUNPACKER
-        // ==============================
+        // ======================
+        // MÉTODO 2 — JSUNPACKER
+        // ======================
         try {
             val document = app.get(url, headers = headers).documentLarge
-            val packedScript = document
+            val packed = document
                 .selectFirst("script:containsData(function(p,a,c,k,e,d))")
                 ?.data()
                 .orEmpty()
 
-            if (packedScript.isNotEmpty()) {
-                JsUnpacker(packedScript).unpack()?.let { unpacked ->
+            if (packed.isNotEmpty()) {
+                JsUnpacker(packed).unpack()?.let { unpacked ->
                     Regex("""file\s*:\s*["'](.*?)["']""")
                         .find(unpacked)
                         ?.groupValues
@@ -83,7 +79,7 @@ class Bysekoze : ExtractorApi() {
                                     name,
                                     name,
                                     link,
-                                    url, // referer
+                                    url,
                                     Qualities.Unknown.value,
                                     link.contains(".m3u8")
                                 )
@@ -91,6 +87,13 @@ class Bysekoze : ExtractorApi() {
                         }
                 }
             }
-        } catch (_: Exception) { }
+        } catch (_: Exception) {}
+
+        // ======================
+        // MÉTODO 3 — Intentar Filemoon fallback
+        // ======================
+        try {
+            loadExtractor(url.replace("byse", "filemoon"), referer, subtitleCallback, callback)
+        } catch (_: Exception) {}
     }
 }
