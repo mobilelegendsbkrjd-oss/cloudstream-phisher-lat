@@ -22,34 +22,47 @@ object UniversalResolver {
 
         try {
 
-            if (loadExtractor(url, referer, subtitleCallback, callback)) {
-                success = true
-            }
+            // PRIMER INTENTO: extractor nativo Cloudstream
+            success = success || loadExtractor(url, referer, subtitleCallback, callback)
 
             when {
 
                 url.contains("hqq.to") ||
                 url.contains("waaw.to") ||
                 url.contains("netu.tv") -> {
+
                     success = success || extractHqq(url, referer, callback)
                 }
 
                 url.contains("bysejikuar") ||
                 url.contains("f75s") -> {
-                    success = success || extractBysejikuar(url, referer, callback)
+
+                    // INTENTO 2: loadExtractor con headers reales
+                    success = success || loadExtractor(
+                        url,
+                        referer,
+                        subtitleCallback,
+                        callback,
+                        headers = mapOf(
+                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+                            "Referer" to url,
+                            "Origin" to "https://f75s.com",
+                            "Accept" to "*/*",
+                            "X-Embed-Origin" to "ww2.tlnovelas.net",
+                            "X-Embed-Parent" to url,
+                            "X-Embed-Referer" to referer
+                        )
+                    )
+
+                    // INTENTO 3: extractor custom
+                    if (!success) {
+                        success = success || extractBysejikuar(url, referer, callback)
+                    }
                 }
 
                 else -> {
                     success = success || tryResolveGeneric(url, referer, callback)
                 }
-            }
-
-            if (!success && (
-                url.contains("hqq.to") ||
-                url.contains("waaw.to") ||
-                url.contains("netu.tv")
-            )) {
-                success = success || loadExtractor(url, referer, subtitleCallback, callback)
             }
 
         } catch (_: Exception) {}
@@ -235,7 +248,6 @@ object UniversalResolver {
 
             val base = embedUrl.substringBefore("/e/")
 
-            // VISITAR EMBED PARA OBTENER COOKIES
             val embedRes = app.get(
                 embedUrl,
                 referer = referer,
@@ -250,7 +262,6 @@ object UniversalResolver {
             val viewerId = cookies["byse_viewer_id"] ?: ""
             val deviceId = cookies["byse_device_id"] ?: ""
 
-            // DETAILS - OBTENER INFORMACIÓN DEL EMBED
             val detailsText =
                 app.get(
                     "$base/api/videos/$id/embed/details",
@@ -267,14 +278,12 @@ object UniversalResolver {
 
             val embedFrame = details.embed_frame_url ?: embedUrl
 
-            // DETECTAR HOST REAL PARA PLAYBACK
             val playbackBase =
-                if (embedFrame.contains("f75s") || embedFrame.contains("f75"))
+                if (embedFrame.contains("f75"))
                     "https://f75s.com"
                 else
                     base
 
-            // PLAYBACK - OBTENER DATOS CIFRADOS
             val playbackText =
                 app.get(
                     "$playbackBase/api/videos/$id/embed/playback",
@@ -288,7 +297,7 @@ object UniversalResolver {
                         "Cookie" to buildString {
                             if (viewerId.isNotEmpty()) append("byse_viewer_id=$viewerId; ")
                             if (deviceId.isNotEmpty()) append("byse_device_id=$deviceId")
-                        }.trimEnd(';', ' ')
+                        }.trimEnd(';',' ')
                     )
                 ).text
 
@@ -298,10 +307,8 @@ object UniversalResolver {
                     .playback
                     ?: return false
 
-            // DESCIFRAR PLAYBACK
             val decrypted = decryptPlayback(playback) ?: return false
 
-            // EXTRAER FUENTES DE VIDEO
             val sources =
                 Gson()
                     .fromJson(decrypted, DecryptedPlayback::class.java)
@@ -322,10 +329,11 @@ object UniversalResolver {
                         ) {
                             this.referer = embedFrame
                             this.quality = 0
-                            this.type = if (videoUrl.contains(".m3u8"))
-                                ExtractorLinkType.M3U8
-                            else
-                                ExtractorLinkType.VIDEO
+                            this.type =
+                                if (videoUrl.contains(".m3u8"))
+                                    ExtractorLinkType.M3U8
+                                else
+                                    ExtractorLinkType.VIDEO
                         }
                     )
 
@@ -333,7 +341,6 @@ object UniversalResolver {
                 }
             }
 
-            // FALLBACK: INTENTAR CON EXTRACTOR GENÉRICO
             if (!success) {
                 success = loadExtractor(embedUrl, referer, { }, callback)
             }
