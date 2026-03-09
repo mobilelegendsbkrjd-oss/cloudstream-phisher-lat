@@ -1,8 +1,9 @@
 package com.tlnovelas
 
+import com.google.gson.Gson
+import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.*
-import com.google.gson.Gson
 import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
@@ -21,25 +22,26 @@ object UniversalResolver {
 
         try {
 
-            // Primero intentar extractores nativos
-            if (loadExtractor(url, referer, subtitleCallback, callback)) {
-                success = true
-            }
+            // intento 1 extractor nativo
+            success = success || loadExtractor(url, referer, subtitleCallback, callback)
 
             when {
 
                 url.contains("hqq.to") ||
                 url.contains("waaw.to") ||
                 url.contains("netu.tv") -> {
+
                     success = success || extractHqq(url, referer, callback)
                 }
 
                 url.contains("bysejikuar") ||
                 url.contains("f75s") -> {
+
                     success = success || extractBysejikuar(url, referer, callback)
                 }
 
                 else -> {
+
                     success = success || tryResolveGeneric(url, referer, callback)
                 }
             }
@@ -49,10 +51,6 @@ object UniversalResolver {
         return success
     }
 
-    // =========================
-    // GENERIC PLAYER RESOLVER
-    // =========================
-
     private suspend fun tryResolveGeneric(
         url: String,
         referer: String,
@@ -61,37 +59,50 @@ object UniversalResolver {
 
         return try {
 
-            val doc = app.get(url, referer = referer).text
+            val text = app.get(url, referer = referer).text
+
+            var searchText = text
+
+            if (text.contains("eval(function(p,a,c,k,e")) {
+
+                val unpacker = JsUnpacker(text)
+
+                if (unpacker.detect()) {
+                    unpacker.unpack()?.let { searchText = it }
+                }
+            }
 
             Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""")
-                .find(doc)?.groupValues?.get(1)?.let {
+                .find(searchText)?.groupValues?.get(1)?.let { videoUrl ->
 
                     callback.invoke(
-                        ExtractorLink(
-                            "Direct",
-                            "Direct",
-                            it,
-                            referer,
-                            0,
-                            true
-                        )
+                        newExtractorLink("Generic","Generic",videoUrl) {
+                            this.referer = referer
+                            this.quality = 0
+                            this.type =
+                                if (videoUrl.contains(".m3u8"))
+                                    ExtractorLinkType.M3U8
+                                else
+                                    ExtractorLinkType.VIDEO
+                        }
                     )
 
                     return true
                 }
 
             Regex("""sources:\s*\[\{file:\s*["']([^"']+)""")
-                .find(doc)?.groupValues?.get(1)?.let {
+                .find(searchText)?.groupValues?.get(1)?.let { videoUrl ->
 
                     callback.invoke(
-                        ExtractorLink(
-                            "Generic",
-                            "Generic",
-                            it,
-                            referer,
-                            0,
-                            it.contains(".m3u8")
-                        )
+                        newExtractorLink("Generic","Generic",videoUrl) {
+                            this.referer = referer
+                            this.quality = 0
+                            this.type =
+                                if (videoUrl.contains(".m3u8"))
+                                    ExtractorLinkType.M3U8
+                                else
+                                    ExtractorLinkType.VIDEO
+                        }
                     )
 
                     return true
@@ -104,10 +115,6 @@ object UniversalResolver {
         }
     }
 
-    // =========================
-    // HQQ / WAAW / NETU
-    // =========================
-
     private suspend fun extractHqq(
         embedUrl: String,
         referer: String,
@@ -116,55 +123,217 @@ object UniversalResolver {
 
         return try {
 
-            val id = Regex("""/e/([A-Za-z0-9]+)""")
-                .find(embedUrl)?.groupValues?.get(1) ?: return false
+            val id =
+                Regex("""/e/([A-Za-z0-9]+)""")
+                    .find(embedUrl)
+                    ?.groupValues?.get(1)
+                    ?: return false
 
             val base = embedUrl.substringBefore("/e/")
 
-            val details = app.get(
-                "$base/api/videos/$id/embed/details",
-                headers = mapOf("Referer" to referer)
-            ).text
-
-            val embedFrame = Gson()
-                .fromJson(details, DetailsResponse::class.java)
-                .embed_frame_url ?: return false
-
-            val playbackText = app.get(
-                "$base/api/videos/$id/embed/playback",
+            val embedRes = app.get(
+                embedUrl,
+                referer = referer,
                 headers = mapOf(
-                    "Referer" to embedFrame,
-                    "User-Agent" to USER_AGENT
+                    "User-Agent" to "Mozilla/5.0",
+                    "Accept" to "*/*",
+                    "Referer" to referer
                 )
-            ).text
+            )
 
-            val playback = Gson()
-                .fromJson(playbackText, PlaybackResponse::class.java)
-                .playback ?: return false
+            val cookies = embedRes.cookies
+            val uid = cookies["uid"] ?: ""
+
+            val details =
+                app.get(
+                    "$base/api/videos/$id/embed/details",
+                    headers = mapOf(
+                        "Referer" to embedUrl,
+                        "X-Requested-With" to "XMLHttpRequest",
+                        "User-Agent" to "Mozilla/5.0"
+                    )
+                ).text
+
+            val embedFrame =
+                Gson()
+                    .fromJson(details, DetailsResponse::class.java)
+                    .embed_frame_url
+                    ?: return false
+
+            // truco anti challenge
+            try {
+                app.get(embedUrl, referer = referer)
+                app.get(embedFrame, referer = embedUrl)
+            } catch (_: Exception) {}
+
+            val playbackText =
+                app.get(
+                    "$base/api/videos/$id/embed/playback",
+                    headers = mapOf(
+                        "Referer" to embedFrame,
+                        "Origin" to base,
+                        "Cookie" to if (uid.isNotEmpty()) "uid=$uid" else ""
+                    )
+                ).text
+
+            val playback =
+                Gson()
+                    .fromJson(playbackText, PlaybackResponse::class.java)
+                    .playback
+                    ?: return false
 
             val decrypted = decryptPlayback(playback) ?: return false
 
-            val sources = Gson()
-                .fromJson(decrypted, DecryptedPlayback::class.java)
-                .sources ?: return false
+            val sources =
+                Gson()
+                    .fromJson(decrypted, DecryptedPlayback::class.java)
+                    .sources
+                    ?: return false
 
-            sources.firstOrNull()?.url?.let {
+            var success = false
 
-                callback.invoke(
-                    ExtractorLink(
-                        "HQQ",
-                        "HQQ",
-                        it,
-                        referer,
-                        0,
-                        it.contains(".m3u8")
+            sources.forEach { src ->
+
+                src.url?.let { videoUrl ->
+
+                    callback.invoke(
+                        newExtractorLink("HQQ","HQQ",videoUrl) {
+                            this.referer = embedUrl
+                            this.quality = 0
+                            this.type =
+                                if (videoUrl.contains(".m3u8"))
+                                    ExtractorLinkType.M3U8
+                                else
+                                    ExtractorLinkType.VIDEO
+                        }
                     )
-                )
 
-                return true
+                    success = true
+                }
             }
 
+            success
+
+        } catch (_: Exception) {
             false
+        }
+    }
+
+    private suspend fun extractBysejikuar(
+        embedUrl: String,
+        referer: String,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+
+        return try {
+
+            val id =
+                Regex("""/(e|d)/([A-Za-z0-9]+)""")
+                    .find(embedUrl)
+                    ?.groupValues?.get(2)
+                    ?: return false
+
+            val base = embedUrl.substringBefore("/e/")
+
+            val embedRes = app.get(
+                embedUrl,
+                referer = referer,
+                headers = mapOf(
+                    "User-Agent" to "Mozilla/5.0",
+                    "Referer" to referer
+                )
+            )
+
+            val cookies = embedRes.cookies
+            val viewerId = cookies["byse_viewer_id"] ?: ""
+            val deviceId = cookies["byse_device_id"] ?: ""
+
+            val detailsText =
+                app.get(
+                    "$base/api/videos/$id/embed/details",
+                    headers = mapOf(
+                        "Referer" to embedUrl,
+                        "User-Agent" to "Mozilla/5.0",
+                        "X-Embed-Origin" to "ww2.tlnovelas.net",
+                        "X-Embed-Referer" to referer
+                    )
+                ).text
+
+            val details =
+                Gson().fromJson(detailsText, DetailsResponse::class.java)
+
+            val embedFrame = details.embed_frame_url ?: embedUrl
+
+            // truco anti challenge
+            try {
+                app.get(embedUrl, referer = referer)
+                app.get(embedFrame, referer = embedUrl)
+            } catch (_: Exception) {}
+
+            val playbackBase =
+                if (embedFrame.contains("f75"))
+                    "https://f75s.com"
+                else
+                    base
+
+            val playbackText =
+                app.get(
+                    "$playbackBase/api/videos/$id/embed/playback",
+                    headers = mapOf(
+                        "Referer" to embedFrame,
+                        "Origin" to playbackBase,
+                        "User-Agent" to "Mozilla/5.0",
+                        "X-Embed-Origin" to "ww2.tlnovelas.net",
+                        "X-Embed-Parent" to embedUrl,
+                        "X-Embed-Referer" to referer,
+                        "Cookie" to buildString {
+                            if (viewerId.isNotEmpty()) append("byse_viewer_id=$viewerId; ")
+                            if (deviceId.isNotEmpty()) append("byse_device_id=$deviceId")
+                        }.trimEnd(';',' ')
+                    )
+                ).text
+
+            val playback =
+                Gson()
+                    .fromJson(playbackText, PlaybackResponse::class.java)
+                    .playback
+                    ?: return false
+
+            val decrypted = decryptPlayback(playback) ?: return false
+
+            val sources =
+                Gson()
+                    .fromJson(decrypted, DecryptedPlayback::class.java)
+                    .sources
+                    ?: return false
+
+            var success = false
+
+            sources.forEach { src ->
+
+                src.url?.let { videoUrl ->
+
+                    callback.invoke(
+                        newExtractorLink("Bysejikuar","Bysejikuar",videoUrl) {
+                            this.referer = embedFrame
+                            this.quality = 0
+                            this.type =
+                                if (videoUrl.contains(".m3u8"))
+                                    ExtractorLinkType.M3U8
+                                else
+                                    ExtractorLinkType.VIDEO
+                        }
+                    )
+
+                    success = true
+                }
+            }
+
+            if (!success) {
+                success = loadExtractor(embedUrl, referer, { }, callback)
+            }
+
+            success
 
         } catch (_: Exception) {
             false
@@ -180,8 +349,9 @@ object UniversalResolver {
             val iv = decoder.decode(pad(data.iv))
             val payload = decoder.decode(pad(data.payload))
 
-            val key = decoder.decode(pad(data.key_parts[0])) +
-                    decoder.decode(pad(data.key_parts[1]))
+            val key =
+                decoder.decode(pad(data.key_parts[0])) +
+                decoder.decode(pad(data.key_parts[1]))
 
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
 
@@ -198,102 +368,19 @@ object UniversalResolver {
         }
     }
 
-    // =========================
-    // BYSEJIKUAR
-    // =========================
-
-    private suspend fun extractBysejikuar(
-        embedUrl: String,
-        referer: String,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-
-        return try {
-
-            val id = Regex("""/(e|d)/([A-Za-z0-9]+)""")
-                .find(embedUrl)?.groupValues?.get(2) ?: return false
-
-            val base = embedUrl.substringBefore("/e/")
-
-            val detailsText = app.get(
-                "$base/api/videos/$id/embed/details",
-                headers = mapOf("Referer" to referer)
-            ).text
-
-            val embedFrame = Gson()
-                .fromJson(detailsText, DetailsResponse::class.java)
-                .embed_frame_url ?: return false
-
-            val playbackText = app.get(
-                "$base/api/videos/$id/embed/playback",
-                headers = mapOf(
-                    "Referer" to embedFrame,
-                    "User-Agent" to USER_AGENT
-                )
-            ).text
-
-            val playback = Gson()
-                .fromJson(playbackText, PlaybackResponse::class.java)
-                .playback ?: return false
-
-            val decrypted = decryptPlayback(playback) ?: return false
-
-            val sources = Gson()
-                .fromJson(decrypted, DecryptedPlayback::class.java)
-                .sources ?: return false
-
-            sources.firstOrNull()?.url?.let {
-
-                callback.invoke(
-                    ExtractorLink(
-                        "Bysejikuar",
-                        "Bysejikuar",
-                        it,
-                        referer,
-                        0,
-                        it.contains(".m3u8")
-                    )
-                )
-
-                return true
-            }
-
-            false
-
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    // =========================
-    // UTIL
-    // =========================
-
     private fun pad(s: String): String {
+
         var str = s
-        while (str.length % 4 != 0) str += "="
+
+        while (str.length % 4 != 0)
+            str += "="
+
         return str
     }
 
-    data class DetailsResponse(
-        val embed_frame_url: String?
-    )
-
-    data class PlaybackResponse(
-        val playback: PlaybackData?
-    )
-
-    data class PlaybackData(
-        val iv: String,
-        val payload: String,
-        val key_parts: List<String>
-    )
-
-    data class DecryptedPlayback(
-        val sources: List<DecryptedSource>?
-    )
-
-    data class DecryptedSource(
-        val url: String?
-    )
+    data class DetailsResponse(val embed_frame_url: String?)
+    data class PlaybackResponse(val playback: PlaybackData?)
+    data class PlaybackData(val iv: String, val payload: String, val key_parts: List<String>)
+    data class DecryptedPlayback(val sources: List<DecryptedSource>?)
+    data class DecryptedSource(val url: String?)
 }
