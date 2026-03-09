@@ -11,7 +11,7 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import com.google.gson.Gson
 import com.lagradost.cloudstream3.utils.JsUnpacker
-import com.lagradost.cloudstream3.utils.QUALITIES  // CORREGIDO: Importar QUALITIES en lugar de Qualities
+import com.lagradost.cloudstream3.utils.ExtractorLinkType  // Añadir esta importación
 
 class Tlnovelas : MainAPI() {
     override var mainUrl = "https://ww2.tlnovelas.net"
@@ -127,12 +127,17 @@ class Tlnovelas : MainAPI() {
             val sources = Gson().fromJson(decrypted, DecryptedPlayback::class.java).sources ?: return false
             
             sources.firstOrNull()?.url?.let { sourceUrl ->
-                // CORREGIDO: Usar newExtractorLink en lugar del constructor deprecado
+                // Usar el constructor directamente en lugar de newExtractorLink
                 callback.invoke(
-                    newExtractorLink("Bysejikuar", "Bysejikuar", sourceUrl, referer) {
-                        this.quality = QUALITIES.Unknown.value
-                        this.isM3u8 = sourceUrl.contains(".m3u8")
-                    }
+                    ExtractorLink(
+                        "Bysejikuar",  // source
+                        "Bysejikuar",  // name
+                        sourceUrl,      // url
+                        referer,        // referer
+                        -1,             // quality (Unknown)
+                        sourceUrl.contains(".m3u8"),  // isM3u8
+                        mapOf()         // headers vacío
+                    )
                 )
                 true
             } ?: false
@@ -168,12 +173,17 @@ class Tlnovelas : MainAPI() {
             val docText = app.get(embedUrl, headers = mapOf("Referer" to referer)).text
             val source = Regex("""sources:\s*\[\{file:\s*"([^"]+)"""").find(docText)?.groupValues?.get(1) ?: return false
             
-            // CORREGIDO: Usar newExtractorLink
+            // Usar el constructor directamente
             callback.invoke(
-                newExtractorLink("LuluVdo", "LuluVdo", source, referer) {
-                    this.quality = QUALITIES.Unknown.value
-                    this.isM3u8 = source.contains(".m3u8")
-                }
+                ExtractorLink(
+                    "LuluVdo",      // source
+                    "LuluVdo",      // name
+                    source,          // url
+                    referer,         // referer
+                    -1,              // quality (Unknown)
+                    source.contains(".m3u8"),  // isM3u8
+                    mapOf()          // headers vacío
+                )
             )
             
             Regex("""file:\s*"([^"]+)",\s*label:\s*"([^"]+)"""").findAll(docText).forEach {
