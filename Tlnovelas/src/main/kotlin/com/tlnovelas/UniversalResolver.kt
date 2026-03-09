@@ -1,9 +1,9 @@
 package com.tlnovelas
 
+import com.google.gson.Gson
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.*
-import com.google.gson.Gson
 import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
@@ -63,14 +63,15 @@ object UniversalResolver {
                 .find(doc)?.groupValues?.get(1)?.let {
 
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             "Direct",
                             "Direct",
-                            it,
-                            referer,
-                            0,
-                            true
-                        )
+                            it
+                        ) {
+                            this.referer = referer
+                            this.quality = 0
+                            this.type = ExtractorLinkType.M3U8
+                        }
                     )
 
                     return true
@@ -80,14 +81,17 @@ object UniversalResolver {
                 .find(doc)?.groupValues?.get(1)?.let {
 
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             "Generic",
                             "Generic",
-                            it,
-                            referer,
-                            0,
-                            it.contains(".m3u8")
-                        )
+                            it
+                        ) {
+                            this.referer = referer
+                            this.quality = 0
+                            this.type =
+                                if (it.contains(".m3u8")) ExtractorLinkType.M3U8
+                                else ExtractorLinkType.VIDEO
+                        }
                     )
 
                     return true
@@ -143,14 +147,17 @@ object UniversalResolver {
             sources.firstOrNull()?.url?.let {
 
                 callback.invoke(
-                    ExtractorLink(
+                    newExtractorLink(
                         "HQQ",
                         "HQQ",
-                        it,
-                        referer,
-                        0,
-                        it.contains(".m3u8")
-                    )
+                        it
+                    ) {
+                        this.referer = referer
+                        this.quality = 0
+                        this.type =
+                            if (it.contains(".m3u8")) ExtractorLinkType.M3U8
+                            else ExtractorLinkType.VIDEO
+                    }
                 )
 
                 return true
@@ -160,33 +167,6 @@ object UniversalResolver {
 
         } catch (_: Exception) {
             false
-        }
-    }
-
-    private fun decryptPlayback(data: PlaybackData): String? {
-
-        return try {
-
-            val decoder = Base64.getUrlDecoder()
-
-            val iv = decoder.decode(pad(data.iv))
-            val payload = decoder.decode(pad(data.payload))
-
-            val key = decoder.decode(pad(data.key_parts[0])) +
-                    decoder.decode(pad(data.key_parts[1]))
-
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-
-            cipher.init(
-                Cipher.DECRYPT_MODE,
-                SecretKeySpec(key, "AES"),
-                GCMParameterSpec(128, iv)
-            )
-
-            String(cipher.doFinal(payload))
-
-        } catch (_: Exception) {
-            null
         }
     }
 
@@ -233,14 +213,17 @@ object UniversalResolver {
             sources.firstOrNull()?.url?.let {
 
                 callback.invoke(
-                    ExtractorLink(
+                    newExtractorLink(
                         "Bysejikuar",
                         "Bysejikuar",
-                        it,
-                        referer,
-                        0,
-                        it.contains(".m3u8")
-                    )
+                        it
+                    ) {
+                        this.referer = referer
+                        this.quality = 0
+                        this.type =
+                            if (it.contains(".m3u8")) ExtractorLinkType.M3U8
+                            else ExtractorLinkType.VIDEO
+                    }
                 )
 
                 return true
@@ -250,6 +233,34 @@ object UniversalResolver {
 
         } catch (_: Exception) {
             false
+        }
+    }
+
+    private fun decryptPlayback(data: PlaybackData): String? {
+
+        return try {
+
+            val decoder = Base64.getUrlDecoder()
+
+            val iv = decoder.decode(pad(data.iv))
+            val payload = decoder.decode(pad(data.payload))
+
+            val key =
+                decoder.decode(pad(data.key_parts[0])) +
+                decoder.decode(pad(data.key_parts[1]))
+
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+
+            cipher.init(
+                Cipher.DECRYPT_MODE,
+                SecretKeySpec(key, "AES"),
+                GCMParameterSpec(128, iv)
+            )
+
+            String(cipher.doFinal(payload))
+
+        } catch (_: Exception) {
+            null
         }
     }
 
