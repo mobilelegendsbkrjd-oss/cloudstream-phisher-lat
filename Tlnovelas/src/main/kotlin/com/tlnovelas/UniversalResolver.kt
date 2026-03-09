@@ -235,22 +235,61 @@ object UniversalResolver {
 
             val base = embedUrl.substringBefore("/e/")
 
+            // VISITAR EMBED PARA OBTENER COOKIES
+            val embedRes = app.get(
+                embedUrl,
+                referer = referer,
+                headers = mapOf(
+                    "User-Agent" to "Mozilla/5.0",
+                    "Referer" to referer,
+                    "Accept" to "*/*"
+                )
+            )
+
+            val cookies = embedRes.cookies
+            val viewerId = cookies["byse_viewer_id"] ?: ""
+            val deviceId = cookies["byse_device_id"] ?: ""
+
+            // DETAILS - OBTENER INFORMACIÓN DEL EMBED
             val detailsText =
                 app.get(
                     "$base/api/videos/$id/embed/details",
-                    headers = mapOf("Referer" to referer)
+                    headers = mapOf(
+                        "Referer" to embedUrl,
+                        "User-Agent" to "Mozilla/5.0",
+                        "X-Embed-Origin" to "ww2.tlnovelas.net",
+                        "X-Embed-Referer" to referer
+                    )
                 ).text
 
-            val embedFrame =
-                Gson()
-                    .fromJson(detailsText, DetailsResponse::class.java)
-                    .embed_frame_url
-                    ?: return false
+            val details =
+                Gson().fromJson(detailsText, DetailsResponse::class.java)
 
+            val embedFrame = details.embed_frame_url ?: embedUrl
+
+            // DETECTAR HOST REAL PARA PLAYBACK
+            val playbackBase =
+                if (embedFrame.contains("f75s") || embedFrame.contains("f75"))
+                    "https://f75s.com"
+                else
+                    base
+
+            // PLAYBACK - OBTENER DATOS CIFRADOS
             val playbackText =
                 app.get(
-                    "$base/api/videos/$id/embed/playback",
-                    headers = mapOf("Referer" to embedFrame)
+                    "$playbackBase/api/videos/$id/embed/playback",
+                    headers = mapOf(
+                        "Referer" to embedFrame,
+                        "Origin" to playbackBase,
+                        "User-Agent" to "Mozilla/5.0",
+                        "X-Embed-Origin" to "ww2.tlnovelas.net",
+                        "X-Embed-Parent" to embedUrl,
+                        "X-Embed-Referer" to referer,
+                        "Cookie" to buildString {
+                            if (viewerId.isNotEmpty()) append("byse_viewer_id=$viewerId; ")
+                            if (deviceId.isNotEmpty()) append("byse_device_id=$deviceId")
+                        }.trimEnd(';', ' ')
+                    )
                 ).text
 
             val playback =
@@ -259,32 +298,47 @@ object UniversalResolver {
                     .playback
                     ?: return false
 
+            // DESCIFRAR PLAYBACK
             val decrypted = decryptPlayback(playback) ?: return false
 
+            // EXTRAER FUENTES DE VIDEO
             val sources =
                 Gson()
                     .fromJson(decrypted, DecryptedPlayback::class.java)
                     .sources
                     ?: return false
 
-            sources.firstOrNull()?.url?.let { videoUrl ->
+            var success = false
 
-                callback.invoke(
-                    newExtractorLink("Bysejikuar","Bysejikuar",videoUrl) {
-                        this.referer = referer
-                        this.quality = 0
-                        this.type =
-                            if (videoUrl.contains(".m3u8"))
+            sources.forEach { src ->
+
+                src.url?.let { videoUrl ->
+
+                    callback.invoke(
+                        newExtractorLink(
+                            "Bysejikuar",
+                            "Bysejikuar",
+                            videoUrl
+                        ) {
+                            this.referer = embedFrame
+                            this.quality = 0
+                            this.type = if (videoUrl.contains(".m3u8"))
                                 ExtractorLinkType.M3U8
                             else
                                 ExtractorLinkType.VIDEO
-                    }
-                )
+                        }
+                    )
 
-                return true
+                    success = true
+                }
             }
 
-            false
+            // FALLBACK: INTENTAR CON EXTRACTOR GENÉRICO
+            if (!success) {
+                success = loadExtractor(embedUrl, referer, { }, callback)
+            }
+
+            success
 
         } catch (_: Exception) {
             false
