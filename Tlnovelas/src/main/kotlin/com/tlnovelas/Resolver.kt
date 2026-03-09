@@ -2,6 +2,7 @@ package com.tlnovelas
 
 import com.lagradost.cloudstream3.app
 import org.jsoup.nodes.Document
+import com.lagradost.cloudstream3.utils.JsUnpacker  // Importación correcta
 
 object StreamflixResolver {
 
@@ -40,7 +41,7 @@ object StreamflixResolver {
 
             if (data.contains("eval(function(p,a,c,k,e,d")) {
 
-                val unpacker = JsUnpacker(data)
+                val unpacker = JsUnpacker(data)  // Esto ahora funcionará
 
                 if (unpacker.detect()) {
 
