@@ -10,7 +10,8 @@ import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import com.google.gson.Gson
-import com.lagradost.cloudstream3.utils.JsUnpacker // Asegúrate de importar JsUnpacker
+import com.lagradost.cloudstream3.utils.JsUnpacker
+import com.lagradost.cloudstream3.utils.Resolver // Importar el resolver universal
 
 class Tlnovelas : MainAPI() {
     override var mainUrl = "https://ww2.tlnovelas.net"
@@ -196,9 +197,27 @@ class Tlnovelas : MainAPI() {
             if (!link.contains("google") && !link.contains("adskeeper")) videoLinks.add(link)
         }
 
-        // ===== NUEVAS MEJORAS PARA CAPÍTULOS NUEVOS =====
-        
-        // Buscar video en scripts JS (nuevo sistema)
+        // ===== CAMBIO CLAVE: Nuevo bloque con Resolver =====
+        videoLinks.forEach { link ->
+            try {
+                // intento normal
+                if (loadExtractor(link, data, subtitleCallback, callback)) {
+                    // success = true  // No asignamos aquí para no cortar el flujo
+                }
+
+                // nuevo resolver universal
+                val resolved = Resolver.resolve(link, data)
+
+                if (resolved != null) {
+                    if (loadExtractor(resolved, data, subtitleCallback, callback)) {
+                        // success = true
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        // ===== SEGUNDO CAMBIO: Detección de JS moderno antes del return =====
+        // Detectar reproductores JS modernos
         Regex("""sources\s*:\s*\[\s*\{\s*file\s*:\s*["']([^"']+)""")
             .find(response)?.groupValues?.get(1)?.let { videoLinks.add(it) }
 
@@ -210,14 +229,20 @@ class Tlnovelas : MainAPI() {
         Regex("""window\.location\.href\s*=\s*["']([^"']+)""")
             .find(response)?.groupValues?.get(1)?.let { videoLinks.add(it) }
 
-        // Unpacker JS para código empaquetado (muy importante)
+        // JS PACKED
         if (response.contains("eval(function(p,a,c,k,e")) {
             val unpacker = JsUnpacker(response)
+
             if (unpacker.detect()) {
                 val unpacked = unpacker.unpack()
+
                 unpacked?.let {
                     Regex("""file\s*:\s*["'](https?://[^"']+)""")
-                        .findAll(it).forEach { m -> videoLinks.add(m.groupValues[1]) }
+                        .findAll(it)
+                        .forEach { m -> videoLinks.add(m.groupValues[1]) }
+
+                    Regex("""sources\s*:\s*\[\s*\{\s*file\s*:\s*["']([^"']+)""")
+                        .find(it)?.groupValues?.get(1)?.let { u -> videoLinks.add(u) }
                 }
             }
         }
