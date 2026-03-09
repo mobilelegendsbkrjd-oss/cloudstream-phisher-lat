@@ -1,4 +1,4 @@
-package com.cuevana
+package com.tlnovelas
 
 import com.lagradost.cloudstream3.app
 import org.jsoup.nodes.Document
