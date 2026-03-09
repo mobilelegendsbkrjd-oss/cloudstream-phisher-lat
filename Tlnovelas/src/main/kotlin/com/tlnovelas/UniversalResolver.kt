@@ -1,4 +1,5 @@
 package com.tlnovelas
+
 import com.google.gson.Gson
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
@@ -7,7 +8,6 @@ import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
-import com.lagradost.cloudstream3.utils.Qualities
 
 object UniversalResolver {
     suspend fun resolve(
@@ -38,6 +38,7 @@ object UniversalResolver {
         } catch (_: Exception) {}
         return success
     }
+
     private suspend fun tryResolveGeneric(
         url: String,
         referer: String,
@@ -55,29 +56,29 @@ object UniversalResolver {
                 }
             }
             Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""")
-                .find(searchText)?.groupValues?.get(1)?.let {
+                .find(searchText)?.groupValues?.get(1)?.let { videoUrl ->
                     callback.invoke(
-                        ExtractorLink(
-                            "Generic",
-                            "Generic",
-                            it,
-                            referer,
-                            Qualities.Unknown.value,
-                            it.contains(".m3u8")
+                        newExtractorLink(
+                            source = "Generic",
+                            name = "Generic",
+                            url = videoUrl,
+                            referer = referer,
+                            quality = Qualities.Unknown.value,
+                            isM3u8 = videoUrl.contains(".m3u8")
                         )
                     )
                     return true
                 }
             Regex("""sources:\s*\[\{file:\s*["']([^"']+)""")
-                .find(searchText)?.groupValues?.get(1)?.let {
+                .find(searchText)?.groupValues?.get(1)?.let { videoUrl ->
                     callback.invoke(
-                        ExtractorLink(
-                            "Generic",
-                            "Generic",
-                            it,
-                            referer,
-                            Qualities.Unknown.value,
-                            it.contains(".m3u8")
+                        newExtractorLink(
+                            source = "Generic",
+                            name = "Generic",
+                            url = videoUrl,
+                            referer = referer,
+                            quality = Qualities.Unknown.value,
+                            isM3u8 = videoUrl.contains(".m3u8")
                         )
                     )
                     return true
@@ -87,6 +88,7 @@ object UniversalResolver {
             false
         }
     }
+
     private suspend fun extractHqq(
         embedUrl: String,
         referer: String,
@@ -117,15 +119,15 @@ object UniversalResolver {
             val sources = Gson()
                 .fromJson(decrypted, DecryptedPlayback::class.java)
                 .sources ?: return false
-            sources.firstOrNull()?.url?.let {
+            sources.firstOrNull()?.url?.let { videoUrl ->
                 callback.invoke(
-                    ExtractorLink(
-                        "HQQ",
-                        "HQQ",
-                        it,
-                        referer,
-                        Qualities.Unknown.value,
-                        it.contains(".m3u8")
+                    newExtractorLink(
+                        source = "HQQ",
+                        name = "HQQ",
+                        url = videoUrl,
+                        referer = referer,
+                        quality = Qualities.Unknown.value,
+                        isM3u8 = videoUrl.contains(".m3u8")
                     )
                 )
                 return true
@@ -135,6 +137,7 @@ object UniversalResolver {
             false
         }
     }
+
     private suspend fun extractBysejikuar(
         embedUrl: String,
         referer: String,
@@ -165,15 +168,15 @@ object UniversalResolver {
             val sources = Gson()
                 .fromJson(decrypted, DecryptedPlayback::class.java)
                 .sources ?: return false
-            sources.firstOrNull()?.url?.let {
+            sources.firstOrNull()?.url?.let { videoUrl ->
                 callback.invoke(
-                    ExtractorLink(
-                        "Bysejikuar",
-                        "Bysejikuar",
-                        it,
-                        referer,
-                        Qualities.Unknown.value,
-                        it.contains(".m3u8")
+                    newExtractorLink(
+                        source = "Bysejikuar",
+                        name = "Bysejikuar",
+                        url = videoUrl,
+                        referer = referer,
+                        quality = Qualities.Unknown.value,
+                        isM3u8 = videoUrl.contains(".m3u8")
                     )
                 )
                 return true
@@ -183,6 +186,7 @@ object UniversalResolver {
             false
         }
     }
+
     private fun decryptPlayback(data: PlaybackData): String? {
         return try {
             val decoder = Base64.getUrlDecoder()
@@ -202,11 +206,13 @@ object UniversalResolver {
             null
         }
     }
+
     private fun pad(s: String): String {
         var str = s
         while (str.length % 4 != 0) str += "="
         return str
     }
+
     data class DetailsResponse(val embed_frame_url: String?)
     data class PlaybackResponse(val playback: PlaybackData?)
     data class PlaybackData(val iv: String, val payload: String, val key_parts: List<String>)
