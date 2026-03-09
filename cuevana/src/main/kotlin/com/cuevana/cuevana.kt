@@ -196,30 +196,28 @@ class Cuevana : MainAPI() {
                 val pageProps = res.props?.pageProps
 
                 if (isSeries) {
-                    val seasonsArr = pageProps?.thisSerie?.seasons
-                    if (!seasonsArr.isNullOrEmpty()) {
-                        seasonsArr.forEach { s ->
-                            val sNum = s.number ?: return@forEach
-                            s.episodes?.forEach { e ->
-                                val eSlug = e.url?.slug ?: return@forEach
-                                val eNum = e.number ?: 1
+    val seasonsArr = pageProps?.thisSerie?.seasons
+    if (!seasonsArr.isNullOrEmpty()) {
+        seasonsArr.forEach { s ->
+            val sNum = s.number ?: return@forEach
+            s.episodes?.forEach { e ->
+                val eNum = e.number ?: 1
+                // ────────────────────────────────────────────────
+                // NUEVA CONSTRUCCIÓN DE URL (la que sí funciona ahora)
+                val episodeSlug = "$currentSlug-temporada-$sNum-episodio-$eNum"
+                val episodeUrl = fixUrl("/episodio/$episodeSlug")
+                // ────────────────────────────────────────────────
 
-                                val episodeUrl = if (eSlug.startsWith("episodio")) {
-                                    fixUrl("/$eSlug")
-                                } else {
-                                    fixUrl("/episodio/$eSlug")
-                                }
-
-                                episodesList.add(newEpisode(episodeUrl) {
-                                    this.name = e.title ?: "Episodio $sNum x $eNum"
-                                    this.season = sNum
-                                    this.episode = eNum
-                                    this.posterUrl = e.image
-                                })
-                            }
-                        }
-                    }
-                }
+                episodesList.add(newEpisode(episodeUrl) {
+                    this.name = e.title ?: "T$sNum Ep$eNum"
+                    this.season = sNum
+                    this.episode = eNum
+                    this.posterUrl = e.image?.let { fixUrl(it) }  // o déjalo como estaba
+                })
+            }
+        }
+    }
+}
 
                 pageProps?.relatedMovies?.forEach { movie ->
                     val slugName = movie.slug?.name?.trim() ?: return@forEach
@@ -427,3 +425,4 @@ class Cuevana : MainAPI() {
         return found
     }
 }
+
