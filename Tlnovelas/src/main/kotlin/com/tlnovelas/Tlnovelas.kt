@@ -4,10 +4,6 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import java.net.URLDecoder
-import java.util.Base64
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
 import com.google.gson.Gson
 
 class Tlnovelas : MainAPI() {
@@ -26,17 +22,17 @@ class Tlnovelas : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
 
-        val url = if (page <= 1)
-            "$mainUrl/${request.data}"
-        else
-            "$mainUrl/${request.data}/page/$page"
+        val url =
+            if (page <= 1) "$mainUrl/${request.data}"
+            else "$mainUrl/${request.data}/page/$page"
 
         val document = app.get(url).document
 
-        val home = document
-            .select(".vk-poster, .ani-card, .p-content, .ani-txt")
-            .mapNotNull { it.toSearchResult() }
-            .distinctBy { it.url }
+        val home =
+            document
+                .select(".vk-poster, .ani-card, .p-content, .ani-txt")
+                .mapNotNull { it.toSearchResult() }
+                .distinctBy { it.url }
 
         return newHomePageResponse(request.name, home, true)
     }
@@ -54,10 +50,10 @@ class Tlnovelas : MainAPI() {
 
         if (href.contains("/ver/")) {
 
-            val slug = href
-                .removeSuffix("/")
-                .substringAfterLast("/")
-                .replace(Regex("(?i)-capitulo-\\d+|-capítulo-\\d+"), "")
+            val slug =
+                href.removeSuffix("/")
+                    .substringAfterLast("/")
+                    .replace(Regex("(?i)-capitulo-\\d+|-capítulo-\\d+"), "")
 
             href = "$mainUrl/novela/$slug/"
         }
@@ -82,15 +78,14 @@ class Tlnovelas : MainAPI() {
 
         val document = app.get(url).document
 
-        val novelaLink = document
-            .selectFirst("a[href*='/novela/']")
-            ?.attr("href")
+        val novelaLink =
+            document.selectFirst("a[href*='/novela/']")
+                ?.attr("href")
 
         val finalDoc =
             if (url.contains("/ver/") && novelaLink != null)
                 app.get(novelaLink).document
-            else
-                document
+            else document
 
         val title =
             finalDoc.selectFirst("h1.card-title, .vk-title-main, h1")
@@ -102,27 +97,30 @@ class Tlnovelas : MainAPI() {
         val poster =
             finalDoc.selectFirst("meta[property='og:image']")
                 ?.attr("content")
-                ?: finalDoc.selectFirst(".ani-img img")
-                    ?.attr("src")
+                ?: finalDoc.selectFirst(".ani-img img")?.attr("src")
 
-        val episodes = finalDoc
-            .select("a[href*='/ver/']")
-            .map {
+        val episodes =
+            finalDoc.select("a[href*='/ver/']")
+                .map {
 
-                val epUrl = it.attr("href")
+                    val epUrl = it.attr("href")
 
-                val epName = it.text()
-                    .replace(title, "", true)
-                    .replace(Regex("(?i)Ver|Capitulo|Capítulo"), "")
-                    .trim()
+                    val epName =
+                        it.text()
+                            .replace(title, "", true)
+                            .replace(Regex("(?i)Ver|Capitulo|Capítulo"), "")
+                            .trim()
 
-                newEpisode(epUrl) {
-                    name = if (epName.isEmpty()) "Capítulo"
-                    else "Capítulo $epName"
+                    newEpisode(epUrl) {
+                        name =
+                            if (epName.isEmpty())
+                                "Capítulo"
+                            else
+                                "Capítulo $epName"
+                    }
                 }
-            }
-            .distinctBy { it.data }
-            .reversed()
+                .distinctBy { it.data }
+                .reversed()
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
 
@@ -178,6 +176,7 @@ class Tlnovelas : MainAPI() {
 
         val videoLinks = mutableSetOf<String>()
 
+        // 1️⃣ e[]
         Regex("""e\[(\d+)\]\s*=\s*['"]([^'"]+)['"]""")
             .findAll(response)
             .forEach {
@@ -189,6 +188,7 @@ class Tlnovelas : MainAPI() {
                     videoLinks.add(decoded)
             }
 
+        // 2️⃣ var e = []
         Regex("""var\s+e\s*=\s*\[(.*?)\]""")
             .find(response)
             ?.groupValues
@@ -203,6 +203,7 @@ class Tlnovelas : MainAPI() {
                     videoLinks.add(decoded)
             }
 
+        // 3️⃣ iframe
         Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
             .findAll(response)
             .forEach {
@@ -213,6 +214,7 @@ class Tlnovelas : MainAPI() {
                     videoLinks.add(link)
             }
 
+        // 4️⃣ m3u8 directo
         Regex("""(https?://[^\s"']+\.m3u8[^\s"']*)""")
             .findAll(response)
             .forEach {
@@ -220,27 +222,59 @@ class Tlnovelas : MainAPI() {
                 videoLinks.add(it.groupValues[1])
             }
 
+        // 5️⃣ JS packed
+        if (response.contains("eval(function(p,a,c,k,e")) {
+
+            try {
+
+                val unpacker = JsUnpacker(response)
+
+                if (unpacker.detect()) {
+
+                    val unpacked = unpacker.unpack()
+
+                    unpacked?.let {
+
+                        Regex("""file\s*:\s*["'](https?://[^"']+)""")
+                            .findAll(it)
+                            .forEach { m ->
+                                videoLinks.add(m.groupValues[1])
+                            }
+
+                        Regex("""sources\s*:\s*\[\s*\{\s*file\s*:\s*["']([^"']+)""")
+                            .find(it)
+                            ?.groupValues
+                            ?.get(1)
+                            ?.let { u -> videoLinks.add(u) }
+                    }
+                }
+
+            } catch (_: Exception) {}
+        }
+
         var success = false
 
         videoLinks.forEach { link ->
 
             try {
 
-                if (UniversalResolver.resolve(
-                        link,
-                        data,
-                        subtitleCallback,
-                        callback
-                    )
-                ) {
+                if (loadExtractor(link, data, subtitleCallback, callback)) {
                     success = true
                 }
 
-            } catch (_: Exception) {}
+                val resolved =
+                    StreamflixResolver.resolve(link, data)
 
+                if (resolved != null) {
+
+                    if (loadExtractor(resolved, data, subtitleCallback, callback)) {
+                        success = true
+                    }
+                }
+
+            } catch (_: Exception) {}
         }
 
         return success || videoLinks.isNotEmpty()
     }
 }
-
