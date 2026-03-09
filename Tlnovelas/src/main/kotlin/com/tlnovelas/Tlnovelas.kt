@@ -86,7 +86,6 @@ class Tlnovelas : MainAPI() {
 
     private fun decodeVideoUrl(encoded: String): String {
         try {
-            // Caso 1: Formato viejo "encoded|key" (shift char codes) – para directos
             val parts = encoded.split("|")
             if (parts.size == 2) {
                 val encodedStr = parts[0]
@@ -100,7 +99,6 @@ class Tlnovelas : MainAPI() {
                 return URLDecoder.decode(decodedString, "UTF-8")
             }
 
-            // Caso 2: Base64 simple o JSON encriptado
             try {
                 val padded = padBase64(encoded)
                 val decodedBytes = Base64.getUrlDecoder().decode(padded)
@@ -187,7 +185,9 @@ class Tlnovelas : MainAPI() {
                     url = sourceUrl,
                     referer = referer,
                     quality = 0,
-                    isM3u8 = sourceUrl.contains(".m3u8")
+                    isM3u8 = sourceUrl.contains(".m3u8"),
+                    headers = emptyMap(),
+                    extractorData = null
                 )
             )
             return true
@@ -214,7 +214,9 @@ class Tlnovelas : MainAPI() {
                     url = source,
                     referer = referer,
                     quality = 0,
-                    isM3u8 = source.contains(".m3u8")
+                    isM3u8 = source.contains(".m3u8"),
+                    headers = emptyMap(),
+                    extractorData = null
                 )
             )
 
@@ -324,7 +326,6 @@ class Tlnovelas : MainAPI() {
         return success || videoLinks.isNotEmpty()
     }
 
-    // Modelos mínimos para bysejikuar
     data class DetailsResponse(val embed_frame_url: String?)
     data class PlaybackResponse(val playback: PlaybackData?)
     data class PlaybackData(val iv: String, val payload: String, val key_parts: List<String>)
