@@ -107,7 +107,6 @@ class Tlnovelas : MainAPI() {
                 val decodedStr = String(decodedBytes, Charsets.UTF_8)
                 if (decodedStr.startsWith("http")) return decodedStr
 
-                // Intento de parsear como JSON con iv/payload/key_parts
                 val json = Gson().fromJson(decodedStr, JsonElement::class.java).asJsonObject
                 if (json.has("iv") && json.has("payload") && json.has("key_parts")) {
                     val playbackData = PlaybackData(
@@ -182,12 +181,12 @@ class Tlnovelas : MainAPI() {
 
             val sourceUrl = sources[0].url ?: return false
             callback.invoke(
-                newExtractorLink(
+                ExtractorLink(
                     source = "Bysejikuar",
                     name = "Bysejikuar",
                     url = sourceUrl,
                     referer = referer,
-                    quality = 0,                    // 0 = Unknown, puedes cambiar a 720 o 1080 si sabes
+                    quality = 0,
                     isM3u8 = sourceUrl.contains(".m3u8")
                 )
             )
@@ -209,12 +208,12 @@ class Tlnovelas : MainAPI() {
             val source = sourceMatch?.groupValues?.get(1) ?: return false
 
             callback.invoke(
-                newExtractorLink(
+                ExtractorLink(
                     source = "LuluVdo",
                     name = "LuluVdo",
                     url = source,
                     referer = referer,
-                    quality = 0,                    // 0 = Unknown
+                    quality = 0,
                     isM3u8 = source.contains(".m3u8")
                 )
             )
@@ -242,7 +241,6 @@ class Tlnovelas : MainAPI() {
         val response = app.get(data).text
         val videoLinks = mutableSetOf<String>()
 
-        // Extrae TODOS los strings posibles de e[] (incluso ofuscados)
         val allEncoded = mutableSetOf<String>()
         Regex("""e\[\d+\]\s*=\s*['"]([^'"]+)['"]""").findAll(response).forEach {
             allEncoded.add(it.groupValues[1])
@@ -253,12 +251,10 @@ class Tlnovelas : MainAPI() {
                 .filter { it.isNotEmpty() }
                 .forEach { allEncoded.add(it) }
         }
-        // Regex extra para posibles Base64 largos ofuscados
         Regex("""['"]([A-Za-z0-9+/=]{20,})['"]""").findAll(response).forEach {
             allEncoded.add(it.groupValues[1])
         }
 
-        // Decodifica y filtra URLs válidas
         videoLinks.addAll(allEncoded.map { decodeVideoUrl(it) }.filter { it.startsWith("http") })
 
         val regexVideFunc = Regex("""v_ideo\(([^)]+)\)""")
@@ -303,7 +299,6 @@ class Tlnovelas : MainAPI() {
             } catch (_: Exception) {}
         }
 
-        // FALLBACK para embeds específicos
         if (!success) {
             val embeds = mutableListOf<String>()
             Regex("""['"](https?://[^'"]+)['"]""").findAll(response).forEach {
@@ -329,7 +324,7 @@ class Tlnovelas : MainAPI() {
         return success || videoLinks.isNotEmpty()
     }
 
-    // Modelos para bysejikuar
+    // Modelos mínimos para bysejikuar
     data class DetailsResponse(val embed_frame_url: String?)
     data class PlaybackResponse(val playback: PlaybackData?)
     data class PlaybackData(val iv: String, val payload: String, val key_parts: List<String>)
