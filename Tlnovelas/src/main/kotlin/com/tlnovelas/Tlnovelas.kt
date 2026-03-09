@@ -134,10 +134,6 @@ class Tlnovelas : MainAPI() {
         }
     }
 
-    // ============================================
-    // VIDEO DECODER
-    // ============================================
-
     private fun decodeVideoUrl(encoded: String): String {
 
         return try {
@@ -171,139 +167,6 @@ class Tlnovelas : MainAPI() {
         }
     }
 
-    // ============================================
-    // BYSEJIKUAR
-    // ============================================
-
-    private suspend fun tryExtractBysejikuar(
-        embedUrl: String,
-        referer: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-
-        return try {
-
-            val matcher =
-                Regex("""/(e|d)/([a-zA-Z0-9]+)""")
-                    .find(embedUrl)
-                    ?: return false
-
-            val linkType = matcher.groupValues[1]
-            val videoId = matcher.groupValues[2]
-
-            val base =
-                embedUrl.substringBefore("/e/")
-                    .substringBefore("/d/") + "/"
-
-            val detailsText =
-                app.get(
-                    "$base/api/videos/$videoId/embed/details",
-                    headers = mapOf("Referer" to referer)
-                ).text
-
-            val details =
-                Gson().fromJson(detailsText, DetailsResponse::class.java)
-
-            val embedFrame =
-                details.embed_frame_url ?: return false
-
-            val playbackDomain =
-                if (linkType == "d")
-                    base
-                else
-                    embedFrame.substringBefore("/api/")
-
-            val playbackText =
-                app.get(
-                    "$playbackDomain/api/videos/$videoId/embed/playback",
-                    headers = mapOf(
-                        "User-Agent" to USER_AGENT,
-                        "Referer" to embedFrame,
-                        "X-Embed-Parent" to embedUrl
-                    )
-                ).text
-
-            val playback =
-                Gson()
-                    .fromJson(playbackText, PlaybackResponse::class.java)
-                    .playback
-                    ?: return false
-
-            val decrypted =
-                decryptBysejikuar(playback)
-                    ?: return false
-
-            val sources =
-                Gson()
-                    .fromJson(decrypted, DecryptedPlayback::class.java)
-                    .sources
-                    ?: return false
-
-            sources.firstOrNull()?.url?.let { sourceUrl ->
-
-                callback.invoke(
-                    ExtractorLink(
-                        "Bysejikuar",
-                        "Bysejikuar",
-                        sourceUrl,
-                        referer,
-                        0,
-                        sourceUrl.contains(".m3u8")
-                    )
-                )
-
-                true
-            } ?: false
-
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private fun decryptBysejikuar(data: PlaybackData): String? {
-
-        return try {
-
-            val decoder = Base64.getUrlDecoder()
-
-            val iv = decoder.decode(padBase64(data.iv))
-            val payload = decoder.decode(padBase64(data.payload))
-
-            val key =
-                decoder.decode(padBase64(data.key_parts[0])) +
-                        decoder.decode(padBase64(data.key_parts[1]))
-
-            val cipher =
-                Cipher.getInstance("AES/GCM/NoPadding")
-
-            cipher.init(
-                Cipher.DECRYPT_MODE,
-                SecretKeySpec(key, "AES"),
-                GCMParameterSpec(128, iv)
-            )
-
-            String(cipher.doFinal(payload), Charsets.UTF_8)
-
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun padBase64(s: String): String {
-
-        var padded = s
-
-        while (padded.length % 4 != 0)
-            padded += "="
-
-        return padded
-    }
-
-    // ============================================
-    // LOAD LINKS
-    // ============================================
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -326,7 +189,21 @@ class Tlnovelas : MainAPI() {
                     videoLinks.add(decoded)
             }
 
-        Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""")
+        Regex("""var\s+e\s*=\s*\[(.*?)\]""")
+            .find(response)
+            ?.groupValues
+            ?.get(1)
+            ?.split(",")
+            ?.forEach {
+
+                val decoded =
+                    decodeVideoUrl(it.trim().trim('\'', '"'))
+
+                if (decoded.startsWith("http"))
+                    videoLinks.add(decoded)
+            }
+
+        Regex("""<iframe[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
             .findAll(response)
             .forEach {
 
@@ -349,50 +226,23 @@ class Tlnovelas : MainAPI() {
 
             try {
 
-                if (loadExtractor(link, data, subtitleCallback, callback))
+                if (loadExtractor(link, data, subtitleCallback, callback)) {
                     success = true
+                }
+
+                val resolved =
+                    StreamflixResolver.resolve(link, data)
+
+                if (resolved != null) {
+
+                    if (loadExtractor(resolved, data, subtitleCallback, callback)) {
+                        success = true
+                    }
+                }
 
             } catch (_: Exception) {}
         }
 
-        if (!success) {
-
-            videoLinks.forEach { embed ->
-
-                when {
-
-                    embed.contains("bysejikuar.com") ||
-                            embed.contains("f75s.com") ->
-
-                        success =
-                            success || tryExtractBysejikuar(
-                                embed,
-                                data,
-                                subtitleCallback,
-                                callback
-                            )
-                }
-            }
-        }
-
         return success || videoLinks.isNotEmpty()
     }
-
-    data class DetailsResponse(val embed_frame_url: String?)
-
-    data class PlaybackResponse(val playback: PlaybackData?)
-
-    data class PlaybackData(
-        val iv: String,
-        val payload: String,
-        val key_parts: List<String>
-    )
-
-    data class DecryptedPlayback(
-        val sources: List<DecryptedSource>?
-    )
-
-    data class DecryptedSource(
-        val url: String?
-    )
 }
