@@ -203,7 +203,14 @@ class Cuevana : MainAPI() {
                             s.episodes?.forEach { e ->
                                 val eSlug = e.url?.slug ?: return@forEach
                                 val eNum = e.number ?: 1
-                                episodesList.add(newEpisode(fixUrl("/$eSlug")) {
+
+                                val episodeUrl = if (eSlug.startsWith("episodio")) {
+                                    fixUrl("/$eSlug")
+                                } else {
+                                    fixUrl("/episodio/$eSlug")
+                                }
+
+                                episodesList.add(newEpisode(episodeUrl) {
                                     this.name = e.title ?: "Episodio $sNum x $eNum"
                                     this.season = sNum
                                     this.episode = eNum
@@ -282,7 +289,10 @@ class Cuevana : MainAPI() {
                     val s = parts[0].toIntOrNull() ?: 1
                     val e = parts[1].toIntOrNull() ?: 1
                     if (s <= 0) return@forEach
-                    episodesList.add(newEpisode(fixUrl(a.attr("href"))) {
+                    
+                    val href = a.attr("href")
+                    val episodeUrl = if (href.contains("/episodio/")) href else "/episodio/${href.trim('/')}"
+                    episodesList.add(newEpisode(fixUrl(episodeUrl)) {
                         this.name = li.selectFirst("h2.Title")?.text()?.trim() ?: "Episodio $s x $e"
                         this.season = s
                         this.episode = e
@@ -417,5 +427,3 @@ class Cuevana : MainAPI() {
         return found
     }
 }
-
-
