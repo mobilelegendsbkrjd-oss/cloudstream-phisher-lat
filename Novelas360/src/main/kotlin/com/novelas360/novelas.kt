@@ -11,7 +11,6 @@ class Novelas : MainAPI() {
     override var name = "Novelas360"
     override val hasMainPage = true
     override var lang = "es"
-
     override val supportedTypes = setOf(TvType.TvSeries)
 
     private val chromeUA =
@@ -26,6 +25,15 @@ class Novelas : MainAPI() {
             )
         ).document
     }
+
+    private fun fixUrl(url: String?): String? {
+        if (url.isNullOrBlank()) return null
+        return if (url.startsWith("//")) "https:$url" else url
+    }
+
+    // -------------------------
+    // MAIN PAGE
+    // -------------------------
 
     override suspend fun getMainPage(
         page: Int,
@@ -44,6 +52,10 @@ class Novelas : MainAPI() {
         )
     }
 
+    // -------------------------
+    // SEARCH
+    // -------------------------
+
     override suspend fun search(query: String): List<SearchResponse> {
 
         val document = getDoc("$mainUrl/?s=$query")
@@ -53,29 +65,91 @@ class Novelas : MainAPI() {
             val link = item.selectFirst("a") ?: return@mapNotNull null
             val title = item.selectFirst("h3")?.text() ?: return@mapNotNull null
 
-            newTvSeriesSearchResponse(title, link.attr("href"))
+            val img = item.selectFirst("img")
+
+            val poster = fixUrl(
+                img?.attr("data-src")?.ifBlank { img.attr("src") }
+            )
+
+            newTvSeriesSearchResponse(title, link.attr("href"), TvType.TvSeries) {
+                this.posterUrl = poster
+            }
         }
     }
+
+    // -------------------------
+    // LOAD SERIES
+    // -------------------------
 
     override suspend fun load(url: String): LoadResponse {
 
         val doc = getDoc(url)
 
-        val title = doc.selectFirst("h4 span")?.text() ?: "Novela"
+        val title =
+            doc.selectFirst("h4 span")?.text()
+                ?: doc.selectFirst("h1")?.text()
+                ?: "Novela"
 
-        val episodes = doc.select("div.item h3 a").map {
-            newEpisode(it.attr("href")) {
-                name = it.text()
+        val poster =
+            fixUrl(
+                doc.selectFirst("meta[property=og:image]")
+                    ?.attr("content")
+            )
+
+        val allEpisodes = mutableListOf<Episode>()
+
+        var pageCount = 1
+
+        while (pageCount <= 20) {
+
+            val currentUrl =
+                if (pageCount == 1)
+                    url
+                else
+                    "${url.trimEnd('/')}/page/$pageCount/"
+
+            val pageDoc =
+                if (pageCount == 1)
+                    doc
+                else
+                    try { getDoc(currentUrl) } catch(e: Exception) { null }
+
+            val items =
+                pageDoc?.select("div.item h3 a")
+                    ?: emptyList()
+
+            if (items.isEmpty()) break
+
+            items.forEach { el ->
+
+                allEpisodes.add(
+                    newEpisode(el.attr("href")) {
+                        name = el.text().trim()
+                    }
+                )
             }
+
+            pageCount++
         }
 
         return newTvSeriesLoadResponse(
             title,
             url,
             TvType.TvSeries,
-            episodes.reversed()
-        )
+            allEpisodes.distinctBy { it.data }.reversed()
+        ) {
+
+            this.posterUrl = poster
+
+            this.plot =
+                doc.selectFirst("meta[name=description]")
+                    ?.attr("content")
+        }
     }
+
+    // -------------------------
+    // LOAD LINKS
+    // -------------------------
 
     override suspend fun loadLinks(
         data: String,
@@ -86,30 +160,57 @@ class Novelas : MainAPI() {
 
         val document = getDoc(data)
 
+        var found = false
+
         document.select("iframe").forEach { iframe ->
 
-            val src = iframe.attr("src")
+            val src = fixUrl(iframe.attr("src")) ?: return@forEach
 
-            if (src.contains("novelas360.cyou") || src.contains("cyfs")) {
+            try {
 
-                val extractor = ExtractorNovelas360()
-
-                extractor.getUrl(src, data)?.forEach {
-                    callback.invoke(it)
+                if (
+                    UniversalExtractor.resolve(
+                        src,
+                        data,
+                        subtitleCallback,
+                        callback
+                    )
+                ) {
+                    found = true
                 }
-            }
 
-            loadExtractor(src, data, subtitleCallback, callback)
+            } catch (_: Exception) {}
         }
 
-        return true
+        return found
     }
+
+    // -------------------------
+    // SEARCH RESULT PARSER
+    // -------------------------
 
     private fun Element.toSearchResult(): SearchResponse? {
 
         val href = attr("href")
-        val title = selectFirst("span.tabcontentnom")?.text() ?: return null
 
-        return newTvSeriesSearchResponse(title, href)
+        if (href.isBlank()) return null
+
+        val title =
+            selectFirst("span.tabcontentnom")
+                ?.text()
+                ?.trim()
+                ?: return null
+
+        val img = selectFirst("img")
+
+        val poster =
+            fixUrl(
+                img?.attr("data-src")
+                    ?.ifBlank { img.attr("src") }
+            )
+
+        return newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
+            this.posterUrl = poster
+        }
     }
 }
