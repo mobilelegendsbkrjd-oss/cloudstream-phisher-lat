@@ -2,10 +2,12 @@ package com.novelas360
 
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.ExtractorApi
+import com.lagradost.cloudstream3.ExtractorLink
+import com.lagradost.cloudstream3.util.Qualities
 
 class ExtractorNovelas360 : ExtractorApi() {
-
-    override val name = "Novelas360 Player"
+    override val name = "Novelas360 / Cyou"
     override val mainUrl = "https://novelas360.cyou"
     override val requiresReferer = true
 
@@ -13,28 +15,26 @@ class ExtractorNovelas360 : ExtractorApi() {
         url: String,
         referer: String?
     ): List<ExtractorLink>? {
+        val fixedReferer = referer ?: mainUrl
 
-        val iframeUrl = url
-        val videoKey = iframeUrl.substringAfterLast("/e/")
+        app.get(url, referer = fixedReferer, headers = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Accept" to "*/*",
+            "Origin" to mainUrl
+        ))
 
-        if (videoKey.isBlank())
-            return null
-
-        // Generar cookies
-        app.get(
-            iframeUrl,
-            referer = referer ?: "https://novelas360.com"
-        )
+        val key = url.substringAfter("/e/") ?: return null
 
         val headers = mapOf(
-            "Origin" to "https://novelas360.cyou",
-            "Referer" to iframeUrl,
+            "Origin" to mainUrl,
+            "Referer" to url,
             "X-Requested-With" to "XMLHttpRequest",
-            "User-Agent" to "Mozilla/5.0"
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Accept" to "application/json, text/javascript, */*; q=0.01"
         )
 
         val data = mapOf(
-            "v" to videoKey,
+            "v" to key,
             "secure" to "0",
             "ver" to "4",
             "adb" to "0",
@@ -42,28 +42,29 @@ class ExtractorNovelas360 : ExtractorApi() {
         )
 
         val res = app.post(
-            "https://novelas360.cyou/player/get_md5.php",
+            "$mainUrl/player/get_md5.php",
             data = data,
-            headers = headers
+            headers = headers,
+            timeout = 30
         )
 
         val json = res.parsedSafe<Map<String, String>>() ?: return null
-
         val file = json["file"] ?: return null
 
         return listOf(
             newExtractorLink(
-                name,
-                "Novelas360 Stream",
-                file
+                source = name,
+                name = "Directo Cyou",
+                url = file
             ) {
-                this.referer = iframeUrl
+                this.referer = url
                 this.quality = Qualities.Unknown.value
-                this.type =
-                    if (file.contains(".m3u8"))
-                        ExtractorLinkType.M3U8
-                    else
-                        ExtractorLinkType.VIDEO
+                this.isM3u8 = file.contains(".m3u8")
+                this.headers = mapOf(
+                    "Referer" to url,
+                    "Origin" to mainUrl,
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                )
             }
         )
     }
