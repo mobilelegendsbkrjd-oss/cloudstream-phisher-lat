@@ -12,12 +12,10 @@ class Novelas : MainAPI() {
     override val hasMainPage = true
     override var lang = "es"
 
-    override val supportedTypes = setOf(
-        TvType.TvSeries
-    )
+    override val supportedTypes = setOf(TvType.TvSeries)
 
     private val chromeUA =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 
     private suspend fun getDoc(url: String): Document {
         return app.get(
@@ -27,11 +25,6 @@ class Novelas : MainAPI() {
                 "Referer" to mainUrl
             )
         ).document
-    }
-
-    private fun fixUrl(url: String?): String? {
-        if (url.isNullOrBlank()) return null
-        return if (url.startsWith("//")) "https:$url" else url
     }
 
     override suspend fun getMainPage(
@@ -60,15 +53,7 @@ class Novelas : MainAPI() {
             val link = item.selectFirst("a") ?: return@mapNotNull null
             val title = item.selectFirst("h3")?.text() ?: return@mapNotNull null
 
-            val img = item.selectFirst("img")
-
-            val poster = fixUrl(
-                img?.attr("data-src")?.ifBlank { img.attr("src") }
-            )
-
-            newTvSeriesSearchResponse(title, link.attr("href")) {
-                this.posterUrl = poster
-            }
+            newTvSeriesSearchResponse(title, link.attr("href"))
         }
     }
 
@@ -76,153 +61,55 @@ class Novelas : MainAPI() {
 
         val doc = getDoc(url)
 
-        val title =
-            doc.selectFirst("h4 span")?.text()
-                ?: doc.selectFirst("h1")?.text()
-                ?: "Novela"
+        val title = doc.selectFirst("h4 span")?.text() ?: "Novela"
 
-        val poster =
-            fixUrl(
-                doc.selectFirst("meta[property=og:image]")
-                    ?.attr("content")
-            )
-
-        val allEpisodes = mutableListOf<Episode>()
-
-        var pageCount = 1
-
-        while (pageCount <= 20) {
-
-            val currentUrl =
-                if (pageCount == 1)
-                    url
-                else
-                    "${url.trimEnd('/')}/page/$pageCount/"
-
-            val pageDoc =
-                if (pageCount == 1)
-                    doc
-                else
-                    try { getDoc(currentUrl) } catch(e: Exception) { null }
-
-            val items =
-                pageDoc?.select("div.item h3 a")
-                    ?: emptyList()
-
-            if (items.isEmpty()) break
-
-            items.forEach { el ->
-
-                allEpisodes.add(
-                    newEpisode(el.attr("href")) {
-                        name = el.text().trim()
-                    }
-                )
+        val episodes = doc.select("div.item h3 a").map {
+            newEpisode(it.attr("href")) {
+                name = it.text()
             }
-
-            pageCount++
         }
 
         return newTvSeriesLoadResponse(
             title,
             url,
             TvType.TvSeries,
-            allEpisodes.distinctBy { it.data }.reversed()
-        ) {
-
-            this.posterUrl = poster
-
-            this.plot =
-                doc.selectFirst("meta[name=description]")
-                    ?.attr("content")
-        }
+            episodes.reversed()
+        )
     }
 
     override suspend fun loadLinks(
-    data: String,
-    isCasting: Boolean,
-    subtitleCallback: (SubtitleFile) -> Unit,
-    callback: (ExtractorLink) -> Unit
-): Boolean {
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
 
-    val document = getDoc(data)
+        val document = getDoc(data)
 
-    var found = false
+        document.select("iframe").forEach { iframe ->
 
-    document.select("iframe").forEach { iframe ->
+            val src = iframe.attr("src")
 
-        val src = fixUrl(iframe.attr("src")) ?: return@forEach
+            if (src.contains("novelas360.cyou") || src.contains("cyfs")) {
 
-        try {
+                val extractor = ExtractorNovelas360()
 
-            val iframeRes = app.get(
-                src,
-                headers = mapOf(
-                    "Referer" to data,
-                    "User-Agent" to chromeUA
-                )
-            )
-
-            val html = iframeRes.text
-
-            // buscar m3u8 o mp4 directo
-            Regex("""(https?.*?\.(?:m3u8|mp4).*?)["']""")
-                .findAll(html)
-                .forEach { match ->
-
-                    val videoUrl = match.groupValues[1].replace("\\/", "/")
-
-                    callback.invoke(
-                        newExtractorLink(
-                            "Novelas360",
-                            "Directo",
-                            videoUrl
-                        ) {
-                            this.quality = Qualities.Unknown.value
-                            this.headers = mapOf(
-                                "User-Agent" to chromeUA,
-                                "Referer" to src,
-                                "Origin" to mainUrl
-                            )
-                        }
-                    )
-
-                    found = true
+                extractor.getUrl(src, data)?.forEach {
+                    callback.invoke(it)
                 }
-
-            // usar extractores internos de cloudstream
-            if (loadExtractor(src, data, subtitleCallback, callback)) {
-                found = true
             }
 
-        } catch (_: Exception) {}
-    }
+            loadExtractor(src, data, subtitleCallback, callback)
+        }
 
-    return found
-}
+        return true
+    }
 
     private fun Element.toSearchResult(): SearchResponse? {
 
         val href = attr("href")
+        val title = selectFirst("span.tabcontentnom")?.text() ?: return null
 
-        if (href.isBlank()) return null
-
-        val title =
-            selectFirst("span.tabcontentnom")
-                ?.text()
-                ?.trim()
-                ?: return null
-
-        val img = selectFirst("img")
-
-        val poster =
-            fixUrl(
-                img?.attr("data-src")
-                    ?.ifBlank { img.attr("src") }
-            )
-
-        return newTvSeriesSearchResponse(title, href) {
-            this.posterUrl = poster
-        }
+        return newTvSeriesSearchResponse(title, href)
     }
 }
