@@ -21,8 +21,10 @@ class Novelas : MainAPI() {
                 "User-Agent" to chromeUA,
                 "Referer" to mainUrl,
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "Accept-Language" to "es-MX,es;q=0.9"
-            )
+                "Accept-Language" to "es-MX,es;q=0.9",
+                "Connection" to "keep-alive"
+            ),
+            timeout = 45  // más tiempo para evitar IO error
         ).document
     }
 
@@ -33,15 +35,15 @@ class Novelas : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = getDoc("$mainUrl/telenovelas/mexico/")
-        val items = document.select("div.tabcontent#Todos > a, div.item a").mapNotNull { it.toSearchResult() }
+        val items = document.select("div.tabcontent#Todos > a").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(listOf(HomePageList("Telenovelas México", items)), false)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val document = getDoc("$mainUrl/?s=$query")
-        return document.select(".video-item, div.item").mapNotNull { item ->
+        return document.select(".video-item").mapNotNull { item ->
             val link = item.selectFirst("a") ?: return@mapNotNull null
-            val title = item.selectFirst("h3, .tabcontentnom")?.text() ?: return@mapNotNull null
+            val title = item.selectFirst("h3")?.text() ?: return@mapNotNull null
             val img = item.selectFirst("img")
             val poster = fixUrl(img?.attr("data-src")?.ifBlank { img.attr("src") })
             newTvSeriesSearchResponse(title, link.attr("href"), TvType.TvSeries) {
@@ -52,16 +54,16 @@ class Novelas : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val doc = getDoc(url)
-        val title = doc.selectFirst("h4 span, h1")?.text() ?: "Novela"
+        val title = doc.selectFirst("h4 span")?.text() ?: doc.selectFirst("h1")?.text() ?: "Novela"
         val poster = fixUrl(doc.selectFirst("meta[property=og:image]")?.attr("content"))
 
         val allEpisodes = mutableListOf<Episode>()
         var pageCount = 1
 
-        while (true) {
+        while (pageCount <= 20) {
             val currentUrl = if (pageCount == 1) url else "${url.trimEnd('/')}/page/$pageCount/"
-            val pageDoc = try { getDoc(currentUrl) } catch (e: Exception) { break }
-            val items = pageDoc.select("div.item h3 a, .video-item h3 a")
+            val pageDoc = if (pageCount == 1) doc else try { getDoc(currentUrl) } catch (e: Exception) { null }
+            val items = pageDoc?.select("div.item h3 a") ?: emptyList()
             if (items.isEmpty()) break
 
             items.forEach { el ->
@@ -70,7 +72,6 @@ class Novelas : MainAPI() {
                 })
             }
             pageCount++
-            if (pageCount > 30) break
         }
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, allEpisodes.distinctBy { it.data }.reversed()) {
@@ -86,39 +87,88 @@ class Novelas : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = getDoc(data)
-        var success = false
+        var found = false
 
-        // Procesar iframes con UniversalExtractor
-        document.select("iframe[src]").forEach { iframe ->
-            val src = fixUrl(iframe.attr("abs:src")) ?: return@forEach
+        document.select("iframe").forEach { iframe ->
+            val src = fixUrl(iframe.attr("src")) ?: return@forEach
+
             try {
-                if (UniversalExtractor.resolve(src, data, subtitleCallback, callback)) {
-                    success = true
+                // Visita el iframe para obtener cookies y HTML
+                val iframeRes = app.get(
+                    src,
+                    headers = mapOf(
+                        "Referer" to data,
+                        "User-Agent" to chromeUA,
+                        "Origin" to "https://novelas360.cyou",
+                        "Accept" to "*/*"
+                    ),
+                    timeout = 30
+                )
+
+                val iframeHtml = iframeRes.text
+                val cookies = iframeRes.cookies.toString()  // todas las cookies
+
+                // 1. Regex mejorada para file directo (incluye escaped y JSON)
+                Regex("""(https?://[^\s"'\\<>]+?\.(?:m3u8|mp4|ts)[^\s"'\\<>]*?)["'\\]""").findAll(iframeHtml).forEach { match ->
+                    var videoUrl = match.groupValues[1].replace("\\/", "/")
+                    callback.invoke(
+                        newExtractorLink("Servidor Directo", "Servidor Directo", videoUrl) {
+                            this.referer = src
+                            this.quality = Qualities.Unknown.value
+                            this.type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            this.headers = mapOf(
+                                "User-Agent" to chromeUA,
+                                "Referer" to src,
+                                "Origin" to "https://novelas360.cyou",
+                                "Cookie" to cookies
+                            )
+                        }
+                    )
+                    found = true
                 }
-            } catch (_: Exception) {}
+
+                // 2. Extractor nativo (prioridad alta si el iframe es player complejo)
+                if (loadExtractor(src, data, subtitleCallback, callback)) {
+                    found = true
+                }
+
+                // 3. Si quieres unpack (descomenta si ves eval en iframeHtml)
+                /*
+                if (iframeHtml.contains("eval(function(p,a,c,k,e")) {
+                    try {
+                        val unpacker = JsUnpacker(iframeHtml)
+                        if (unpacker.detect()) {
+                            val unpacked = unpacker.unpack()
+                            unpacked?.let { unpackedText ->
+                                Regex("""file\s*:\s*["']([^"']+)["']""").findAll(unpackedText).forEach { m ->
+                                    val videoUrl = m.groupValues[1]
+                                    callback.invoke(
+                                        newExtractorLink("Unpacked File", "Unpacked File", videoUrl) {
+                                            this.referer = src
+                                            this.quality = Qualities.Unknown.value
+                                        }
+                                    )
+                                    found = true
+                                }
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
+                */
+
+            } catch (e: Exception) {
+                // Log para debug
+                // println("Error en iframe $src: ${e.message}")
+            }
         }
 
-        // Fuentes directas en la página principal
-        val pageText = document.outerHtml()
-        Regex("""(https?://[^\s"'<>]+\.(?:m3u8|mp4|mkv)[^\s"'<>]*)""").findAll(pageText).forEach { m ->
-            val videoUrl = m.groupValues[1]
-            callback(
-                newExtractorLink("Directo", "Directo", videoUrl) {
-                    this.referer = data
-                    this.quality = Qualities.Unknown.value
-                    this.type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                }
-            )
-            success = true
-        }
-
-        return success
+        return found
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
         val href = attr("href")
-        if (href.isBlank() || href.contains("/tag/")) return null
-        val title = selectFirst("span.tabcontentnom, h3, h2")?.text()?.trim() ?: return null
+        if (href.isBlank()) return null
+        val title = selectFirst("span.tabcontentnom")?.text()?.trim() ?: return null
         val img = selectFirst("img")
         val poster = fixUrl(img?.attr("data-src")?.ifBlank { img.attr("src") })
         return newTvSeriesSearchResponse(title, href, TvType.TvSeries) {
