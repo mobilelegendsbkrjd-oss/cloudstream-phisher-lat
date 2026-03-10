@@ -141,15 +141,15 @@ class Novelas360 : MainAPI() {
 
         document.select("iframe[src]").forEach { iframe ->
 
-            val src = fixUrl(iframe.attr("abs:src")) ?: return@forEach
+            val src = iframe.attr("abs:src")
 
-            try {
+            if (src.contains("novelas360.cyou")) {
 
                 if (loadExtractor(src, data, subtitleCallback, callback)) {
                     found = true
                 }
 
-            } catch (_: Exception) {}
+            }
         }
 
         // fallback directo m3u8/mp4
