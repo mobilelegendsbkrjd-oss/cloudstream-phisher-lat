@@ -16,48 +16,36 @@ class Novelas : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "$mainUrl/categories/mexico/" to "Novelas"
+        "$mainUrl/categories/mexico/" to "Novelas MX"
     )
 
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
 
         val doc = app.get(request.data).document
 
-        val items = doc.select("article")
+        val items = doc.select(".items .item")
 
-        val home = items.mapNotNull {
+        val home = items.mapNotNull { item ->
 
-            val title = it.selectFirst("h2")?.text() ?: return@mapNotNull null
+            val title = item.selectFirst("h3")?.text() ?: return@mapNotNull null
+            val link = item.selectFirst("a")?.attr("href") ?: return@mapNotNull null
+            val poster = item.selectFirst("img")?.attr("src")
 
-            val link = it.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-
-            val poster = it.selectFirst("img")?.attr("src")
-
-            val fixedLink = link
-                .replace("/video/", "/categories/")
-                .substringBefore("-capitulo")
-
-            newTvSeriesSearchResponse(title, fixedLink) {
+            newTvSeriesSearchResponse(title, link) {
                 this.posterUrl = poster
             }
-        }.distinctBy { it.url }
+        }
 
-        return newHomePageResponse(
-            request.name,
-            home
-        )
+        return newHomePageResponse(request.name, home)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
 
         val doc = app.get("$mainUrl/?s=$query").document
 
-        return doc.select("article").mapNotNull {
+        return doc.select(".items .item").mapNotNull {
 
-            val title = it.selectFirst("h2")?.text() ?: return@mapNotNull null
+            val title = it.selectFirst("h3")?.text() ?: return@mapNotNull null
             val link = it.selectFirst("a")?.attr("href") ?: return@mapNotNull null
             val poster = it.selectFirst("img")?.attr("src")
 
@@ -72,15 +60,13 @@ class Novelas : MainAPI() {
         val doc = app.get(url).document
 
         val title = doc.selectFirst("h1")?.text() ?: "Novela"
-
-        val poster = doc.selectFirst("img")?.attr("src")
+        val poster = doc.selectFirst(".poster img")?.attr("src")
 
         val episodes = doc.select("a[href*=/video/]")
 
         val episodeList = episodes.mapIndexedNotNull { index, ep ->
 
             val epUrl = ep.attr("href")
-
             val name = ep.text()
 
             newEpisode(epUrl) {
@@ -106,12 +92,13 @@ class Novelas : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        ExtractorNovelas360().getUrl(
-            data,
-            null,
-            subtitleCallback,
-            callback
-        )
+        val extractor = ExtractorNovelas360()
+
+        val links = extractor.getUrl(data, null) ?: return false
+
+        links.forEach {
+            callback.invoke(it)
+        }
 
         return true
     }
