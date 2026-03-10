@@ -161,7 +161,7 @@ class Novelas360 : MainAPI() {
 
                 val videoUrl = m.groupValues[1]
 
-                callback.invoke(
+                callback(
                     newExtractorLink(
                         "Directo",
                         "Directo",
@@ -169,7 +169,11 @@ class Novelas360 : MainAPI() {
                     ) {
                         this.referer = data
                         this.quality = Qualities.Unknown.value
-                        this.isM3u8 = videoUrl.contains(".m3u8")
+                        this.type =
+                            if (videoUrl.contains(".m3u8"))
+                                ExtractorLinkType.M3U8
+                            else
+                                ExtractorLinkType.VIDEO
                     }
                 )
 
