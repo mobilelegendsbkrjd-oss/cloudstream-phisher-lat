@@ -5,7 +5,7 @@ import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
-class Novelas360 : MainAPI() {
+class Novelas : MainAPI() {
 
     override var mainUrl = "https://novelas360.com"
     override var name = "Novelas360"
