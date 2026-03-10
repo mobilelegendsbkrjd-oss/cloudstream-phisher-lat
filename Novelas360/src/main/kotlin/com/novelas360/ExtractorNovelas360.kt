@@ -57,11 +57,11 @@ class ExtractorNovelas360 : ExtractorApi() {
         val file = json["file"] ?: return null
 
         val link = newExtractorLink(
-            source = name,
-            name = "Servidor Cyou",
-            url = file,
-            referer = url
+            "Novelas360",
+            "Servidor Cyou",
+            file
         ) {
+            this.referer = url
             this.quality = Qualities.Unknown.value
             this.type = if (file.contains(".m3u8"))
                 ExtractorLinkType.M3U8
