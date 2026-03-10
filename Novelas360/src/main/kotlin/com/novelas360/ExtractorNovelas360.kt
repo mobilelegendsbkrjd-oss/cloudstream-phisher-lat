@@ -11,55 +11,54 @@ class ExtractorNovelas360 : ExtractorApi() {
 
     override suspend fun getUrl(
         url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
+        referer: String?
+    ): List<ExtractorLink>? {
 
         val doc = app.get(url).document
 
-        val iframe = doc.selectFirst("iframe")?.attr("src") ?: return
+        val iframe = doc.selectFirst("iframe")?.attr("src") ?: return null
 
-        if (!iframe.contains("novelas360.cyou")) return
+        if (!iframe.contains("novelas360.cyou")) return null
 
         val key = iframe.substringAfter("/e/")
 
+        // abrir iframe para cookies
         app.get(iframe)
 
         val headers = mapOf(
             "Origin" to mainUrl,
             "Referer" to iframe,
-            "X-Requested-With" to "XMLHttpRequest",
-            "Content-Type" to "application/json"
+            "X-Requested-With" to "XMLHttpRequest"
         )
 
-        val body = """
-        {
-            "v":"$key",
-            "secure":"0",
-            "ver":"4",
-            "adb":"0",
-            "wasmcheck":0
-        }
-        """
+        val data = mapOf(
+            "v" to key,
+            "secure" to "0",
+            "ver" to "4",
+            "adb" to "0",
+            "wasmcheck" to "0"
+        )
 
-        val response = app.post(
+        val res = app.post(
             "$mainUrl/player/get_md5.php",
-            data = body,
+            data = data,
             headers = headers
         )
 
-        val file = response.jsonObject["file"]?.asString ?: return
+        val json = res.parsedSafe<Map<String, String>>() ?: return null
 
-        callback.invoke(
-            ExtractorLink(
-                name,
-                name,
-                file,
-                iframe,
-                Qualities.Unknown.value,
-                isM3u8 = true
-            )
+        val file = json["file"] ?: return null
+
+        return listOf(
+            newExtractorLink(
+                source = name,
+                name = name,
+                url = file,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = iframe
+                this.quality = Qualities.Unknown.value
+            }
         )
     }
 }
