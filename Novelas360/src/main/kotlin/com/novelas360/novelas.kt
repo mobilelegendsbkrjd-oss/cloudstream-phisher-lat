@@ -139,54 +139,67 @@ class Novelas : MainAPI() {
     }
 
     override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
+    data: String,
+    isCasting: Boolean,
+    subtitleCallback: (SubtitleFile) -> Unit,
+    callback: (ExtractorLink) -> Unit
+): Boolean {
 
-        val document = getDoc(data)
+    val document = getDoc(data)
 
-        document.select("iframe").forEach { iframe ->
+    var found = false
 
-            val src = fixUrl(iframe.attr("src")) ?: return@forEach
+    document.select("iframe").forEach { iframe ->
 
-            val iframeHtml = app.get(
+        val src = fixUrl(iframe.attr("src")) ?: return@forEach
+
+        try {
+
+            val iframeRes = app.get(
                 src,
                 headers = mapOf(
                     "Referer" to data,
                     "User-Agent" to chromeUA
                 )
-            ).text
+            )
 
+            val html = iframeRes.text
+
+            // buscar m3u8 o mp4 directo
             Regex("""(https?.*?\.(?:m3u8|mp4).*?)["']""")
-                .findAll(iframeHtml)
+                .findAll(html)
                 .forEach { match ->
 
-                    val videoUrl =
-                        match.groupValues[1].replace("\\/", "/")
+                    val videoUrl = match.groupValues[1].replace("\\/", "/")
 
                     callback.invoke(
                         newExtractorLink(
                             "Novelas360",
-                            "Servidor Directo",
+                            "Directo",
                             videoUrl
                         ) {
                             this.quality = Qualities.Unknown.value
                             this.headers = mapOf(
                                 "User-Agent" to chromeUA,
                                 "Referer" to src,
-                                "Origin" to "https://novelas360.cyou"
+                                "Origin" to mainUrl
                             )
                         }
                     )
+
+                    found = true
                 }
 
-            loadExtractor(src, data, subtitleCallback, callback)
-        }
+            // usar extractores internos de cloudstream
+            if (loadExtractor(src, data, subtitleCallback, callback)) {
+                found = true
+            }
 
-        return true
+        } catch (_: Exception) {}
     }
+
+    return found
+}
 
     private fun Element.toSearchResult(): SearchResponse? {
 
