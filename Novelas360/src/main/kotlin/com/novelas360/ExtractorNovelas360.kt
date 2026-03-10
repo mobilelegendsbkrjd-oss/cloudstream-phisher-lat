@@ -17,7 +17,7 @@ class ExtractorNovelas360 : ExtractorApi() {
     ): List<ExtractorLink>? {
         val fixedReferer = referer ?: mainUrl
 
-        // 1. Visita el iframe para setear cookies y confirmar
+        // Visita iframe para cookies
         app.get(
             url,
             referer = fixedReferer,
@@ -28,10 +28,8 @@ class ExtractorNovelas360 : ExtractorApi() {
             )
         )
 
-        // 2. Extrae la key del /e/
         val key = url.substringAfter("/e/") ?: return null
 
-        // 3. Headers exactos del POST que funcionaba
         val headers = mapOf(
             "Origin" to mainUrl,
             "Referer" to url,
@@ -40,7 +38,7 @@ class ExtractorNovelas360 : ExtractorApi() {
             "Accept" to "application/json, text/javascript, */*; q=0.01"
         )
 
-        val postData = mapOf(
+        val data = mapOf(
             "v" to key,
             "secure" to "0",
             "ver" to "4",
@@ -48,10 +46,9 @@ class ExtractorNovelas360 : ExtractorApi() {
             "wasmcheck" to "0"
         )
 
-        // 4. POST al endpoint que devuelve el file
         val res = app.post(
             "$mainUrl/player/get_md5.php",
-            data = postData,
+            data = data,
             headers = headers,
             timeout = 30
         )
@@ -59,16 +56,15 @@ class ExtractorNovelas360 : ExtractorApi() {
         val json = res.parsedSafe<Map<String, String>>() ?: return null
         val file = json["file"] ?: return null
 
-        // 5. Retorna el link directo con headers correctos
         return listOf(
-            ExtractorLink(
+            newExtractorLink(
                 source = name,
                 name = "Directo (m3u8/mp4)",
-                url = file,
-                referer = url,
-                quality = Qualities.Unknown.value,
-                isM3u8 = file.contains(".m3u8")
-            ).apply {
+                url = file
+            ) {
+                this.referer = url
+                this.quality = Qualities.Unknown.value
+                this.isM3u8 = file.contains(".m3u8")
                 this.headers = mapOf(
                     "Referer" to url,
                     "Origin" to mainUrl,
