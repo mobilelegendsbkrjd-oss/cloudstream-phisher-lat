@@ -71,10 +71,10 @@ class Novelas360 : MainAPI() {
                 })
             }
             pageCount++
-            if (pageCount > 100) break  // seguridad, pero ahora puede llegar a más
+            if (pageCount > 100) break  // límite alto
         }
 
-        // Orden como el sitio: más reciente primero (sin reversed)
+        // Sin reversed: orden del sitio (recientes arriba)
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, allEpisodes.distinctBy { it.data }) {
             this.posterUrl = poster
             this.plot = doc.selectFirst("meta[name=description]")?.attr("content") ?: ""
@@ -93,13 +93,22 @@ class Novelas360 : MainAPI() {
         document.select("iframe[src]").forEach { iframe ->
             val src = fixUrl(iframe.attr("abs:src")) ?: return@forEach
             try {
-                if (UniversalExtractor.resolve(src, data, subtitleCallback, callback)) {
-                    found = true
+                // Prioridad: extractor personalizado para cyou
+                if (src.contains("novelas360.cyou") || src.contains("cyou") || src.contains("cyfs")) {
+                    // Como es ExtractorApi, CloudStream lo llamará auto si lo registraste
+                    // Pero para forzar, puedes llamar loadExtractor(src, data, subtitleCallback, callback)
+                    if (loadExtractor(src, data, subtitleCallback, callback)) {
+                        found = true
+                    }
+                } else {
+                    if (loadExtractor(src, data, subtitleCallback, callback)) {
+                        found = true
+                    }
                 }
             } catch (_: Exception) {}
         }
 
-        // Fuentes directas por si acaso
+        // Fuentes directas
         val pageText = document.outerHtml()
         Regex("""(https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*)""").findAll(pageText).forEach { m ->
             val videoUrl = m.groupValues[1]
