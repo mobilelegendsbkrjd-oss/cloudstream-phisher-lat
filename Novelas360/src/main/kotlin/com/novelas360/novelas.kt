@@ -163,13 +163,18 @@ class Novelas360 : MainAPI() {
 
                 callback(
                     newExtractorLink(
-                        source = "Directo",
-                        name = "Directo",
-                        url = videoUrl,
-                        referer = data,
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = videoUrl.contains(".m3u8")
-                    )
+                        "Directo",
+                        "Directo",
+                        videoUrl
+                    ) {
+                        this.referer = data
+                        this.quality = Qualities.Unknown.value
+                        this.type =
+                            if (videoUrl.contains(".m3u8"))
+                                ExtractorLinkType.M3U8
+                            else
+                                ExtractorLinkType.VIDEO
+                    }
                 )
 
                 found = true
