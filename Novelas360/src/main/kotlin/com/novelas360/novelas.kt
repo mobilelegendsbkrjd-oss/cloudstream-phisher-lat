@@ -5,7 +5,7 @@ import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
-class Novelas : MainAPI() {
+class Novelas360 : MainAPI() {
     override var mainUrl = "https://novelas360.com"
     override var name = "Novelas360"
     override val hasMainPage = true
@@ -71,10 +71,10 @@ class Novelas : MainAPI() {
                 })
             }
             pageCount++
-            if (pageCount > 100) break  // límite muy alto por seguridad
+            if (pageCount > 100) break  // seguridad, pero ahora puede llegar a más
         }
 
-        // Orden como el sitio: más reciente primero (quitamos .reversed())
+        // Orden como el sitio: más reciente primero (sin reversed)
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, allEpisodes.distinctBy { it.data }) {
             this.posterUrl = poster
             this.plot = doc.selectFirst("meta[name=description]")?.attr("content") ?: ""
@@ -90,95 +90,27 @@ class Novelas : MainAPI() {
         val document = getDoc(data)
         var found = false
 
-        // 1. Iframes principales
         document.select("iframe[src]").forEach { iframe ->
             val src = fixUrl(iframe.attr("abs:src")) ?: return@forEach
             try {
-                val iframeRes = app.get(
-                    src,
-                    headers = mapOf(
-                        "Referer" to data,
-                        "User-Agent" to chromeUA,
-                        "Origin" to "https://novelas360.cyou",
-                        "Accept" to "*/*"
-                    ),
-                    timeout = 30
-                )
-
-                val iframeHtml = iframeRes.text
-                val cookies = iframeRes.cookies.toString()
-
-                // Regex fuerte para m3u8/mp4 directo
-                Regex("""(https?://[^\s"'\\<>]+?\.(?:m3u8|mp4|ts|avi|mkv)[^\s"'\\<>]*?)["'\\]""").findAll(iframeHtml).forEach { match ->
-                    var videoUrl = match.groupValues[1].replace("\\/", "/")
-                    callback.invoke(
-                        newExtractorLink("Servidor Directo", "Servidor Directo", videoUrl) {
-                            this.referer = src
-                            this.quality = Qualities.Unknown.value
-                            this.type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            this.headers = mapOf(
-                                "User-Agent" to chromeUA,
-                                "Referer" to src,
-                                "Origin" to "https://novelas360.cyou",
-                                "Cookie" to cookies
-                            )
-                        }
-                    )
+                if (UniversalExtractor.resolve(src, data, subtitleCallback, callback)) {
                     found = true
                 }
-
-                // Extractor nativo
-                if (loadExtractor(src, data, subtitleCallback, callback)) {
-                    found = true
-                }
-
-                // Si quieres unpack (descomenta si ves eval en algún iframe)
-                /*
-                if (iframeHtml.contains("eval(function(p,a,c,k,e")) {
-                    try {
-                        val unpacker = JsUnpacker(iframeHtml)
-                        if (unpacker.detect()) {
-                            val unpacked = unpacker.unpack()
-                            unpacked?.let { unpackedText ->
-                                Regex("""(https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*)""").findAll(unpackedText).forEach { m ->
-                                    val videoUrl = m.groupValues[1]
-                                    callback.invoke(
-                                        newExtractorLink("Unpacked", "Unpacked", videoUrl) {
-                                            this.referer = src
-                                            this.quality = Qualities.Unknown.value
-                                        }
-                                    )
-                                    found = true
-                                }
-                            }
-                        }
-                    } catch (_: Exception) {}
-                }
-                */
-
-            } catch (e: Exception) {
-                // println("Error iframe $src: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
-        // Fuentes directas en la página (por si no hay iframe)
+        // Fuentes directas por si acaso
         val pageText = document.outerHtml()
         Regex("""(https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*)""").findAll(pageText).forEach { m ->
             val videoUrl = m.groupValues[1]
-            callback.invoke(
-                newExtractorLink("Directo Página", "Directo Página", videoUrl) {
+            callback(
+                newExtractorLink("Directo", "Directo", videoUrl) {
                     this.referer = data
                     this.quality = Qualities.Unknown.value
                     this.type = if (videoUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                 }
             )
             found = true
-        }
-
-        // Si no encontró nada, agregamos nota en plot (opcional)
-        if (!found) {
-            // Puedes comentar esto si no quieres
-            // println("No se encontraron enlaces en $data")
         }
 
         return found
