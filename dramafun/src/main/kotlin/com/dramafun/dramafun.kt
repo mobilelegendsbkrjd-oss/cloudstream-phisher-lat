@@ -30,7 +30,7 @@ class DramaFun : MainAPI() {
         val top = getCategory("$mainUrl/topvideos.php")
         val peliculas = getCategory("$mainUrl/category.php?cat=peliculas-audio-espanol-latino")
         val doramas = getCategory("$mainUrl/category.php?cat=Doramas-Sub-Espanol")
-        val nuevos = getCategory("$mainUrl/newvideos.php")
+        val nuevos = getCategory("$mainUrl/newvideos.php")  // agregué nuevos para que veas lo último
 
         home.add(HomePageList("Nuevos Episodios", nuevos))
         home.add(HomePageList("Top Videos", top))
@@ -40,14 +40,14 @@ class DramaFun : MainAPI() {
         return newHomePageResponse(home)
     }
 
-    // ================= CATEGORY =================
+    // ================= CATEGORY / LISTAS =================
 
     private suspend fun getCategory(url: String): List<SearchResponse> {
 
         val doc = app.get(url).document
 
-        return doc.select("ul.pm-ul-browse-videos li")
-            .mapNotNull { it.toSearchResult() }
+        // El sitio ya no usa ul.pm-ul-browse-videos → usamos los <a> con watch.php?vid=
+        return doc.select("a[href*=watch.php?vid=]").mapNotNull { it.toSearchResult() }
     }
 
     // ================= SEARCH =================
@@ -56,8 +56,7 @@ class DramaFun : MainAPI() {
 
         val doc = app.get("$mainUrl/search.php?keywords=$query").document
 
-        return doc.select("ul.pm-ul-browse-videos li")
-            .mapNotNull { it.toSearchResult() }
+        return doc.select("a[href*=watch.php?vid=]").mapNotNull { it.toSearchResult() }
     }
 
     // ================= LOAD =================
@@ -71,22 +70,35 @@ class DramaFun : MainAPI() {
                 ?: doc.selectFirst("h2")?.text()
                 ?: "Drama"
 
-        val cleanTitle = title.replace(Regex("(?i)Capítulo.*|\\(en Español\\)|online sub español HD|en Español"), "").trim()
+        val cleanTitle = title.replace(Regex("(?i)Capitulo.*|online sub español HD|en Español"), "").trim()
 
         val poster =
-            doc.selectFirst(".pm-video-thumb img")
-                ?.attr("src")
+            doc.selectFirst("meta[property=og:image]")?.attr("content")
+                ?: doc.selectFirst(".pm-video-thumb img, .pm-series-brief img")?.attr("abs:src")
 
-        val episodes = doc.select("ul.s a")
+        val plot = doc.selectFirst(".pm-series-description p, .pm-video-description p")?.text()?.trim()
 
-        if (episodes.isNotEmpty()) {
+        // Episodios: desktop (ul.s) o mobile (select.episodeoption)
+        val episodesDesktop = doc.select("ul.s a[href*=watch.php?vid=]")
+        val episodesMobile = doc.select("select.episodeoption option[value*=watch.php?vid=]")
 
-            val epList = episodes.map {
+        val episodeElements = if (episodesDesktop.isNotEmpty()) episodesDesktop else episodesMobile
 
-                val epUrl = "\( mainUrl/ \){it.attr("href")}"
+        if (episodeElements.isNotEmpty()) {
+
+            val epList = episodeElements.mapIndexed { index, el ->
+
+                val epUrlRaw = el.attr("href") ?: el.attr("value") ?: ""
+                val epUrl = if (epUrlRaw.startsWith("http")) epUrlRaw else "$mainUrl/$epUrlRaw"
+
+                val epText = el.text().trim() ?: el.attr("title") ?: ""
+                val epNum = Regex("(?i)capitulo\\s*(\\d+)").find(epText)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: (index + 1)
 
                 newEpisode(epUrl) {
-                    name = "Episodio ${it.text()}"
+                    name = "Capítulo $epNum"
+                    episode = epNum
+                    season = 1  // solo 1 por ahora
                 }
             }
 
@@ -97,9 +109,11 @@ class DramaFun : MainAPI() {
                 epList
             ) {
                 posterUrl = poster
+                this.plot = plot
             }
         }
 
+        // Si no hay episodios → movie o episodio suelto
         return newMovieLoadResponse(
             cleanTitle,
             url,
@@ -107,6 +121,7 @@ class DramaFun : MainAPI() {
             url
         ) {
             posterUrl = poster
+            this.plot = plot
         }
     }
 
@@ -121,32 +136,30 @@ class DramaFun : MainAPI() {
 
         val doc = app.get(data).document
 
-        val enfun = doc.selectFirst("a.xtgo")?.attr("href")
+        // Buscamos los enlaces xtgo o cualquier a con enfun.php?post=
+        val enfun = doc.selectFirst("a.xtgo[href*=enfun.php?post=]")?.attr("href")
+            ?: doc.select("a[href*=enfun.php?post=]").firstOrNull()?.attr("href")
             ?: return false
 
         val post = enfun.substringAfter("post=")
 
-        val decoded =
-            String(Base64.decode(post, Base64.DEFAULT))
+        try {
+            val decoded = String(Base64.decode(post, Base64.DEFAULT))
+            val json = JSONObject(decoded)
 
-        val json = JSONObject(decoded)
+            if (json.has("servers")) {
+                val servers = json.getJSONObject("servers")
+                val keys = servers.keys()
 
-        val servers = json.getJSONObject("servers")
-
-        val keys = servers.keys()
-
-        while (keys.hasNext()) {
-
-            val key = keys.next()
-
-            val server = servers.getString(key)
-
-            loadExtractor(
-                server,
-                data,
-                subtitleCallback,
-                callback
-            )
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    val server = servers.getString(key)
+                    loadExtractor(server, data, subtitleCallback, callback)
+                }
+            }
+        } catch (e: Exception) {
+            // Si falla el decode, al menos intentamos pasar la URL de enfun directamente
+            loadExtractor(enfun, data, subtitleCallback, callback)
         }
 
         return true
@@ -156,35 +169,24 @@ class DramaFun : MainAPI() {
 
     private fun Element.toSearchResult(): SearchResponse? {
 
-        val link =
-            selectFirst("a")?.attr("href") ?: return null
+        val linkRaw = selectFirst("a")?.attr("href") ?: attr("href") ?: return null
+        val link = if (linkRaw.startsWith("http")) linkRaw else "$mainUrl/$linkRaw"
 
-        val title =
-            selectFirst("h3")?.text() ?: return null
+        val titleRaw = selectFirst("h3")?.text()
+            ?: ownText().trim().ifEmpty { attr("title") }
+            ?: return null
 
-        // Limpieza de título (sin capítulo ni basura)
-        val cleanTitle = title
-            .replace(Regex("(?i)\\[|\\]|\\(en\\s*Español\\)|Sub\\s*Español|HD|online|completo|Capítulo \\d+|Episodio \\d+"), "")
-            .trim()
+        val cleanTitle = titleRaw.replace(Regex("(?i)\\[|\\]|\\(en\\s*Español\\)|Sub\\s*Español|HD|online"), "").trim()
 
-        if (cleanTitle.isBlank()) return null
-
-        // Poster: priorizamos data-echo (lazy load), fallback a src
+        // Cambio ÚNICO: priorizamos data-echo para las carátulas lazy load
         val posterRaw = selectFirst("img[data-echo]")?.attr("data-echo")
             ?: selectFirst("img")?.attr("src")
-
         val poster = if (posterRaw?.startsWith("http") == true) posterRaw
         else posterRaw?.let { "$mainUrl/$it" }
 
-        val fixedLink =
-            if (link.startsWith("http"))
-                link
-            else
-                "$mainUrl/$link"
-
         return newTvSeriesSearchResponse(
             cleanTitle,
-            fixedLink
+            link
         ) {
             this.posterUrl = poster
         }
