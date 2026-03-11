@@ -27,15 +27,15 @@ class DramaFun : MainAPI() {
 
         val home = mutableListOf<HomePageList>()
 
-        val nuevos = cleanAndDeduplicate(getCategory("$mainUrl/newvideos.php"))
-        val top = cleanAndDeduplicate(getCategory("$mainUrl/topvideos.php"))
-        val doramasSub = cleanAndDeduplicate(getCategory("$mainUrl/category.php?cat=Doramas-Sub-Espanol"))
-        val novelasTurcasAudio = cleanAndDeduplicate(getCategory("$mainUrl/category.php?cat=series-y-novelas-turcas-en-espanol"))
-        val novelasTurcasSub = cleanAndDeduplicate(getCategory("$mainUrl/category.php?cat=novelas-turcas-subtituladas"))
-        val novelasCompletas = cleanAndDeduplicate(getCategory("$mainUrl/category.php?cat=Novelas-y-Telenovelas-Completas"))
-        val anime = cleanAndDeduplicate(getCategory("$mainUrl/category.php?cat=Anime"))
-        val peliculasLatino = cleanAndDeduplicate(getCategory("$mainUrl/category.php?cat=peliculas-audio-espanol-latino"))
-        val peliculasSub = cleanAndDeduplicate(getCategory("$mainUrl/category.php?cat=peliculas-subtituladas"))
+        val nuevos = cleanAndDeduplicate(fetchPaginated("$mainUrl/newvideos.php", maxPages = 3))
+        val top = cleanAndDeduplicate(fetchPaginated("$mainUrl/topvideos.php", maxPages = 3))
+        val doramasSub = cleanAndDeduplicate(fetchPaginated("$mainUrl/category.php?cat=Doramas-Sub-Espanol", maxPages = 3))
+        val novelasTurcasAudio = cleanAndDeduplicate(fetchPaginated("$mainUrl/category.php?cat=series-y-novelas-turcas-en-espanol", maxPages = 3))
+        val novelasTurcasSub = cleanAndDeduplicate(fetchPaginated("$mainUrl/category.php?cat=novelas-turcas-subtituladas", maxPages = 3))
+        val novelasCompletas = cleanAndDeduplicate(fetchPaginated("$mainUrl/category.php?cat=Novelas-y-Telenovelas-Completas", maxPages = 3))
+        val anime = cleanAndDeduplicate(fetchPaginated("$mainUrl/category.php?cat=Anime", maxPages = 3))
+        val peliculasLatino = cleanAndDeduplicate(fetchPaginated("$mainUrl/category.php?cat=peliculas-audio-espanol-latino", maxPages = 2)) // menos páginas para películas
+        val peliculasSub = cleanAndDeduplicate(fetchPaginated("$mainUrl/category.php?cat=peliculas-subtituladas", maxPages = 2))
 
         home.add(HomePageList("Nuevos Episodios", nuevos))
         home.add(HomePageList("Top Videos", top))
@@ -50,26 +50,43 @@ class DramaFun : MainAPI() {
         return newHomePageResponse(home)
     }
 
-    // ================= Limpieza y deduplicación por nombre base + URL =================
+    // ================= Fetch con paginación básica =================
+    private suspend fun fetchPaginated(baseUrl: String, maxPages: Int = 3): List<SearchResponse> {
+        val allItems = mutableListOf<SearchResponse>()
+
+        for (p in 1..maxPages) {
+            val url = if (p == 1) baseUrl else "$baseUrl&page=$p"
+            val doc = app.get(url, timeout = 20).document
+            val pageItems = doc.select("a[href*=watch.php?vid=]").mapNotNull { it.toSearchResult() }
+
+            if (pageItems.isEmpty()) break // si no hay más páginas, salimos
+
+            allItems.addAll(pageItems)
+        }
+
+        return allItems
+    }
+
+    // ================= Limpieza y deduplicación inteligente =================
     private fun cleanAndDeduplicate(items: List<SearchResponse>): List<SearchResponse> {
-        val seenByUrl = mutableSetOf<String>() // evita duplicados por URL exacta
-        val seenByName = mutableMapOf<String, SearchResponse>() // evita duplicados por serie
+        val seenByUrl = mutableSetOf<String>() // evita duplicados exactos por URL
+        val seenByName = mutableMapOf<String, SearchResponse>() // para series
 
         items.forEach { item ->
-            // 1. Evitar duplicado exacto por URL
             if (item.url in seenByUrl) return@forEach
             seenByUrl.add(item.url)
 
-            // 2. Nombre base limpio para agrupar series
-            val baseName = item.name
-                .replace(Regex("(?i)(capitulo|episodio|online|sub español|HD|completo|ver|pelicula|audio latino|en español|\\d+:\\d+:\\d+|\\(\\d+\\)|\\d+).*"), "")
-                .replace(Regex("\\s+"), " ")
-                .trim()
-                .lowercase()
+            // ¿Es serie o película? (si tiene "capitulo/episodio" en nombre, es serie)
+            val isSeriesLike = Regex("(?i)(capitulo|episodio)").containsMatchIn(item.name)
 
-            if (baseName.isNotBlank()) {
-                if (!seenByName.containsKey(baseName)) {
-                    // Título más limpio para mostrar
+            if (isSeriesLike) {
+                val baseName = item.name
+                    .replace(Regex("(?i)(capitulo|episodio|online|sub español|HD|completo|ver|pelicula|audio latino|en español|\\d+:\\d+:\\d+|\\(\\d+\\)|\\d+).*"), "")
+                    .replace(Regex("\\s+"), " ")
+                    .trim()
+                    .lowercase()
+
+                if (baseName.isNotBlank() && !seenByName.containsKey(baseName)) {
                     val cleanDisplayName = item.name
                         .replace(Regex("(?i)(capitulo|episodio).*"), "")
                         .trim()
@@ -84,7 +101,7 @@ class DramaFun : MainAPI() {
                     seenByName[baseName] = newItem
                 }
             } else {
-                // Si no tiene nombre base (películas sueltas), agregar directo
+                // Películas: solo por URL, sin deduplicar por nombre (evita borrar buenas)
                 seenByName[item.url] = item
             }
         }
@@ -99,7 +116,7 @@ class DramaFun : MainAPI() {
         return doc.select("a[href*=watch.php?vid=]").mapNotNull { it.toSearchResult() }
     }
 
-    // ================= SEARCH (también deduplicada) =================
+    // ================= SEARCH (deduplicada) =================
 
     override suspend fun search(query: String): List<SearchResponse> {
         if (query.isBlank()) return emptyList()
