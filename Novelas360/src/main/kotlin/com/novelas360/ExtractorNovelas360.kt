@@ -1,11 +1,7 @@
 package com.novelas360
 
 import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.utils.ExtractorApi
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.*
 
 class ExtractorNovelas360 : ExtractorApi() {
 
@@ -18,54 +14,90 @@ class ExtractorNovelas360 : ExtractorApi() {
         referer: String?
     ): List<ExtractorLink>? {
 
-        val headers = mapOf(
-            "User-Agent" to "Mozilla/5.0",
-            "Referer" to (referer ?: mainUrl)
-        )
-
-        // abrir embed
-        val doc = app.get(
+        val res = app.get(
             url,
-            headers = headers
-        ).document
-
-        val html = doc.html()
-
-        // extraer ws token
-        val ws = Regex("""var\s+ws\s*=\s*['"]([^'"]+)""")
-            .find(html)
-            ?.groupValues
-            ?.get(1)
-            ?: return null
-
-        // extraer id base64
-        val id = url.substringAfter("/e/")
-
-        // endpoint del player
-        val videoPage = "$mainUrl/f/$id$ws"
-
-        val videoRes = app.get(
-            videoPage,
-            headers = headers,
-            referer = url
-        ).text
-
-        // buscar playlist
-        val m3u8 = Regex("""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""")
-            .find(videoRes)
-            ?.value
-            ?: return null
-
-        return listOf(
-            newExtractorLink(
-                name,
-                name,
-                m3u8
-            ) {
-                this.referer = mainUrl
-                this.quality = Qualities.Unknown.value
-                this.type = ExtractorLinkType.M3U8
-            }
+            headers = mapOf(
+                "User-Agent" to "Mozilla/5.0",
+                "Referer" to (referer ?: mainUrl)
+            )
         )
+
+        val html = res.text
+
+        val links = mutableListOf<String>()
+
+        // detectar m3u8 directo
+        Regex("""https?:\/\/[^\s"'<>]+\.m3u8""")
+            .findAll(html)
+            .forEach {
+                links.add(it.value.replace("\\/", "/"))
+            }
+
+        // detectar mp4
+        Regex("""https?:\/\/[^\s"'<>]+\.mp4""")
+            .findAll(html)
+            .forEach {
+                links.add(it.value.replace("\\/", "/"))
+            }
+
+        // detectar CDN oculto
+        Regex("""https?:\/\/[^\s"'<>]*cfeucdn\.com[^\s"'<>]+""")
+            .findAll(html)
+            .forEach {
+                links.add(it.value.replace("\\/", "/"))
+            }
+
+        if (links.isEmpty()) return null
+
+        val finalLinks = links.distinct()
+
+        val videos = mutableListOf<ExtractorLink>()
+
+        finalLinks.forEach { link ->
+
+            if (link.contains(".m3u8")) {
+
+                val streams = M3u8Helper().m3u8Generation(
+                    M3u8Helper.M3u8Stream(
+                        link,
+                        headers = mapOf(
+                            "User-Agent" to "Mozilla/5.0",
+                            "Referer" to mainUrl
+                        )
+                    ),
+                    true
+                )
+
+                streams.forEach { stream ->
+
+                    videos.add(
+                        newExtractorLink(
+                            source = name,
+                            name = "$name ${stream.quality}p",
+                            url = stream.streamUrl,
+                            type = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = mainUrl
+                            this.quality = stream.quality ?: Qualities.Unknown.value
+                        }
+                    )
+                }
+
+            } else {
+
+                videos.add(
+                    newExtractorLink(
+                        source = name,
+                        name = name,
+                        url = link
+                    ) {
+                        this.referer = mainUrl
+                        this.quality = Qualities.Unknown.value
+                    }
+                )
+            }
+        }
+
+        return videos
     }
 }

@@ -11,10 +11,11 @@ class Novelas360 : MainAPI() {
     override var name = "Novelas360"
     override val hasMainPage = true
     override var lang = "es"
+
     override val supportedTypes = setOf(TvType.TvSeries)
 
     private val chromeUA =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36"
 
     private suspend fun getDoc(url: String): Document {
         return app.get(
@@ -22,8 +23,7 @@ class Novelas360 : MainAPI() {
             headers = mapOf(
                 "User-Agent" to chromeUA,
                 "Referer" to mainUrl
-            ),
-            timeout = 45
+            )
         ).document
     }
 
@@ -39,9 +39,9 @@ class Novelas360 : MainAPI() {
 
         val document = getDoc("$mainUrl/telenovelas/mexico/")
 
-        val items =
-            document.select("div.tabcontent#Todos > a, div.item a")
-                .mapNotNull { it.toSearchResult() }
+        val items = document
+            .select("div.tabcontent#Todos > a")
+            .mapNotNull { it.toSearchResult() }
 
         return newHomePageResponse(
             listOf(HomePageList("Telenovelas México", items)),
@@ -53,22 +53,18 @@ class Novelas360 : MainAPI() {
 
         val document = getDoc("$mainUrl/?s=$query")
 
-        return document.select(".video-item, div.item").mapNotNull { item ->
+        return document.select(".video-item").mapNotNull { item ->
 
             val link = item.selectFirst("a") ?: return@mapNotNull null
-            val title = item.selectFirst("h3, .tabcontentnom")?.text()
-                ?: return@mapNotNull null
+            val title = item.selectFirst("h3")?.text() ?: return@mapNotNull null
 
             val img = item.selectFirst("img")
 
-            val poster =
-                fixUrl(img?.attr("data-src")?.ifBlank { img.attr("src") })
+            val poster = fixUrl(
+                img?.attr("data-src")?.ifBlank { img.attr("src") }
+            )
 
-            newTvSeriesSearchResponse(
-                title,
-                link.attr("href"),
-                TvType.TvSeries
-            ) {
+            newTvSeriesSearchResponse(title, link.attr("href")) {
                 this.posterUrl = poster
             }
         }
@@ -79,16 +75,21 @@ class Novelas360 : MainAPI() {
         val doc = getDoc(url)
 
         val title =
-            doc.selectFirst("h4 span, h1")?.text() ?: "Novela"
+            doc.selectFirst("h4 span")?.text()
+                ?: doc.selectFirst("h1")?.text()
+                ?: "Novela"
 
         val poster =
-            fixUrl(doc.selectFirst("meta[property=og:image]")?.attr("content"))
+            fixUrl(
+                doc.selectFirst("meta[property=og:image]")
+                    ?.attr("content")
+            )
 
         val allEpisodes = mutableListOf<Episode>()
 
         var pageCount = 1
 
-        while (true) {
+        while (pageCount <= 20) {
 
             val currentUrl =
                 if (pageCount == 1)
@@ -97,11 +98,14 @@ class Novelas360 : MainAPI() {
                     "${url.trimEnd('/')}/page/$pageCount/"
 
             val pageDoc =
-                try { getDoc(currentUrl) }
-                catch (_: Exception) { break }
+                if (pageCount == 1)
+                    doc
+                else
+                    try { getDoc(currentUrl) } catch (_: Exception) { null }
 
             val items =
-                pageDoc.select("div.item h3 a, .video-item h3 a")
+                pageDoc?.select("div.item h3 a")
+                    ?: emptyList()
 
             if (items.isEmpty()) break
 
@@ -114,17 +118,18 @@ class Novelas360 : MainAPI() {
             }
 
             pageCount++
-
-            if (pageCount > 100) break
         }
 
         return newTvSeriesLoadResponse(
             title,
             url,
             TvType.TvSeries,
-            allEpisodes.distinctBy { it.data }
+            allEpisodes.distinctBy { it.data }.reversed()
         ) {
             this.posterUrl = poster
+            this.plot =
+                doc.selectFirst("meta[name=description]")
+                    ?.attr("content")
         }
     }
 
@@ -137,50 +142,59 @@ class Novelas360 : MainAPI() {
 
         val document = getDoc(data)
 
-        var found = false
+        val iframes = document.select("iframe")
 
-        document.select("iframe[src]").forEach { iframe ->
+        if (iframes.isEmpty()) return false
 
-            val src = iframe.attr("abs:src")
+        iframes.forEach { iframe ->
 
-            if (src.contains("novelas360.cyou")) {
+            val src = fixUrl(iframe.attr("src")) ?: return@forEach
 
-                if (loadExtractor(src, data, subtitleCallback, callback)) {
-                    found = true
-                }
+            if (
+                src.contains("/e/")
+                || src.contains("novelas360")
+                || src.contains("divxplayer")
+                || src.contains("metaverseid")
+                || src.contains("akpdm")
+            ) {
 
+                loadExtractor(src, data, subtitleCallback, callback)
+
+            } else {
+
+                val iframeHtml = app.get(
+                    src,
+                    headers = mapOf(
+                        "Referer" to data,
+                        "User-Agent" to chromeUA
+                    )
+                ).text
+
+                Regex("""(https?.*?\.(?:m3u8|mp4).*?)["']""")
+                    .findAll(iframeHtml)
+                    .forEach { match ->
+
+                        val videoUrl =
+                            match.groupValues[1].replace("\\/", "/")
+
+                        callback.invoke(
+                            newExtractorLink(
+                                "Novelas360",
+                                "Servidor Directo",
+                                videoUrl
+                            ) {
+                                this.quality = Qualities.Unknown.value
+                                this.headers = mapOf(
+                                    "User-Agent" to chromeUA,
+                                    "Referer" to src
+                                )
+                            }
+                        )
+                    }
             }
         }
 
-        // fallback directo m3u8/mp4
-        val pageText = document.outerHtml()
-
-        Regex("""(https?://[^\s"'<>]+\.(?:m3u8|mp4)[^\s"'<>]*)""")
-            .findAll(pageText)
-            .forEach { m ->
-
-                val videoUrl = m.groupValues[1]
-
-                callback(
-                    newExtractorLink(
-                        "Directo",
-                        "Directo",
-                        videoUrl
-                    ) {
-                        this.referer = data
-                        this.quality = Qualities.Unknown.value
-                        this.type =
-                            if (videoUrl.contains(".m3u8"))
-                                ExtractorLinkType.M3U8
-                            else
-                                ExtractorLinkType.VIDEO
-                    }
-                )
-
-                found = true
-            }
-
-        return found
+        return true
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
@@ -190,19 +204,20 @@ class Novelas360 : MainAPI() {
         if (href.isBlank()) return null
 
         val title =
-            selectFirst("span.tabcontentnom")?.text()?.trim()
+            selectFirst("span.tabcontentnom")
+                ?.text()
+                ?.trim()
                 ?: return null
 
         val img = selectFirst("img")
 
         val poster =
-            fixUrl(img?.attr("data-src")?.ifBlank { img.attr("src") })
+            fixUrl(
+                img?.attr("data-src")
+                    ?.ifBlank { img.attr("src") }
+            )
 
-        return newTvSeriesSearchResponse(
-            title,
-            href,
-            TvType.TvSeries
-        ) {
+        return newTvSeriesSearchResponse(title, href) {
             this.posterUrl = poster
         }
     }
