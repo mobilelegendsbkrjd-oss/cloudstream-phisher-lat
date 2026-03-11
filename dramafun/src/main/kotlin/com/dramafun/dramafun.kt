@@ -34,7 +34,7 @@ class DramaFun : MainAPI() {
         val novelasTurcasSub = cleanAndDeduplicate(fetchPaginated("$mainUrl/category.php?cat=novelas-turcas-subtituladas", maxPages = 3))
         val novelasCompletas = cleanAndDeduplicate(fetchPaginated("$mainUrl/category.php?cat=Novelas-y-Telenovelas-Completas", maxPages = 3))
         val anime = cleanAndDeduplicate(fetchPaginated("$mainUrl/category.php?cat=Anime", maxPages = 3))
-        val peliculasLatino = cleanAndDeduplicate(fetchPaginated("$mainUrl/category.php?cat=peliculas-audio-espanol-latino", maxPages = 2)) // menos páginas para películas
+        val peliculasLatino = cleanAndDeduplicate(fetchPaginated("$mainUrl/category.php?cat=peliculas-audio-espanol-latino", maxPages = 2))
         val peliculasSub = cleanAndDeduplicate(fetchPaginated("$mainUrl/category.php?cat=peliculas-subtituladas", maxPages = 2))
 
         home.add(HomePageList("Nuevos Episodios", nuevos))
@@ -50,7 +50,7 @@ class DramaFun : MainAPI() {
         return newHomePageResponse(home)
     }
 
-    // ================= Fetch con paginación básica =================
+    // ================= Fetch con paginación =================
     private suspend fun fetchPaginated(baseUrl: String, maxPages: Int = 3): List<SearchResponse> {
         val allItems = mutableListOf<SearchResponse>()
 
@@ -59,36 +59,33 @@ class DramaFun : MainAPI() {
             val doc = app.get(url, timeout = 20).document
             val pageItems = doc.select("a[href*=watch.php?vid=]").mapNotNull { it.toSearchResult() }
 
-            if (pageItems.isEmpty()) break // si no hay más páginas, salimos
-
+            if (pageItems.isEmpty()) break
             allItems.addAll(pageItems)
         }
 
         return allItems
     }
 
-    // ================= Limpieza y deduplicación inteligente =================
+    // ================= Limpieza y deduplicación (mejorado para novelas) =================
     private fun cleanAndDeduplicate(items: List<SearchResponse>): List<SearchResponse> {
-        val seenByUrl = mutableSetOf<String>() // evita duplicados exactos por URL
-        val seenByName = mutableMapOf<String, SearchResponse>() // para series
+        val seenByUrl = mutableSetOf<String>()
+        val seenByName = mutableMapOf<String, SearchResponse>()
 
         items.forEach { item ->
             if (item.url in seenByUrl) return@forEach
             seenByUrl.add(item.url)
 
-            // ¿Es serie o película? (si tiene "capitulo/episodio" en nombre, es serie)
-            val isSeriesLike = Regex("(?i)(capitulo|episodio)").containsMatchIn(item.name)
+            // Regex más amplio para novelas turcas y telenovelas
+            val baseName = item.name
+                .replace(Regex("(?i)(capitulo|episodio|final|completo|online|sub español|HD|audio latino|en español|turca|telenovela|\\d+:\\d+:\\d+|\\(\\d+\\)|\\d+).*"), "")
+                .replace(Regex("\\s+"), " ")
+                .trim()
+                .lowercase()
 
-            if (isSeriesLike) {
-                val baseName = item.name
-                    .replace(Regex("(?i)(capitulo|episodio|online|sub español|HD|completo|ver|pelicula|audio latino|en español|\\d+:\\d+:\\d+|\\(\\d+\\)|\\d+).*"), "")
-                    .replace(Regex("\\s+"), " ")
-                    .trim()
-                    .lowercase()
-
-                if (baseName.isNotBlank() && !seenByName.containsKey(baseName)) {
+            if (baseName.isNotBlank()) {
+                if (!seenByName.containsKey(baseName)) {
                     val cleanDisplayName = item.name
-                        .replace(Regex("(?i)(capitulo|episodio).*"), "")
+                        .replace(Regex("(?i)(capitulo|episodio|final|completo).*"), "")
                         .trim()
 
                     val newItem = newTvSeriesSearchResponse(
@@ -101,7 +98,7 @@ class DramaFun : MainAPI() {
                     seenByName[baseName] = newItem
                 }
             } else {
-                // Películas: solo por URL, sin deduplicar por nombre (evita borrar buenas)
+                // Fallback para películas o items sin nombre parseable
                 seenByName[item.url] = item
             }
         }
