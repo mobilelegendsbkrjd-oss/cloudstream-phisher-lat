@@ -29,7 +29,7 @@ class DramaFun : MainAPI() {
 
         val nuevos = cleanAndDeduplicate(getCategory("$mainUrl/newvideos.php"))
         val top = cleanAndDeduplicate(getCategory("$mainUrl/topvideos.php"))
-        val peliculas = getCategory("$mainUrl/category.php?cat=peliculas-audio-espanol-latino") // películas no deduplicar
+        val peliculas = getCategory("$mainUrl/category.php?cat=peliculas-audio-espanol-latino") // no deduplicar películas
         val doramas = cleanAndDeduplicate(getCategory("$mainUrl/category.php?cat=Doramas-Sub-Espanol"))
 
         home.add(HomePageList("Nuevos Episodios", nuevos))
@@ -40,21 +40,12 @@ class DramaFun : MainAPI() {
         return newHomePageResponse(home)
     }
 
-    // ================= CATEGORY / LISTAS =================
-
-    private suspend fun getCategory(url: String): List<SearchResponse> {
-
-        val doc = app.get(url).document
-
-        return doc.select("a[href*=watch.php?vid=]").mapNotNull { it.toSearchResult() }
-    }
-
-    // ================= Función para limpiar y deduplicar por nombre base =================
+    // ================= Limpieza y deduplicación por nombre base =================
     private fun cleanAndDeduplicate(items: List<SearchResponse>): List<SearchResponse> {
         val seen = mutableMapOf<String, SearchResponse>() // clave: nombre base limpio
 
         items.forEach { item ->
-            // Nombre base: quitamos capítulo/episodio y basura
+            // Nombre base limpio para comparar (ignora capítulo/episodio/etc.)
             val baseName = item.name
                 .replace(Regex("(?i)(capitulo|episodio|online|sub español|HD|completo|ver|pelicula|audio latino|en español|\\d+:\\d+:\\d+|\\(\\d+\\)|\\d+).*"), "")
                 .replace(Regex("\\s+"), " ")
@@ -62,11 +53,32 @@ class DramaFun : MainAPI() {
                 .lowercase()
 
             if (baseName.isNotBlank() && !seen.containsKey(baseName)) {
-                seen[baseName] = item.copy(name = item.name.replace(Regex("(?i)(capitulo|episodio).*"), "").trim()) // título más limpio
+                // Creamos nuevo SearchResponse con título más limpio (sin "Capítulo X")
+                val cleanDisplayName = item.name
+                    .replace(Regex("(?i)(capitulo|episodio).*"), "")
+                    .trim()
+
+                val newItem = newTvSeriesSearchResponse(
+                    name = cleanDisplayName,
+                    url = item.url
+                ) {
+                    posterUrl = item.posterUrl
+                }
+
+                seen[baseName] = newItem
             }
         }
 
         return seen.values.toList()
+    }
+
+    // ================= CATEGORY / LISTAS =================
+
+    private suspend fun getCategory(url: String): List<SearchResponse> {
+
+        val doc = app.get(url).document
+
+        return doc.select("a[href*=watch.php?vid=]").mapNotNull { it.toSearchResult() }
     }
 
     // ================= SEARCH =================
@@ -116,7 +128,7 @@ class DramaFun : MainAPI() {
                 newEpisode(epUrl) {
                     name = "Capítulo $epNum"
                     episode = epNum
-                    season = 1  // solo 1 por ahora
+                    season = 1
                 }
             }
 
