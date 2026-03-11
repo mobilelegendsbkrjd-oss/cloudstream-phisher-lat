@@ -4,7 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 
-class dramafun : MainAPI() {
+class DramaFun : MainAPI() {
 
     override var mainUrl = "https://ww6.dramafuntv.com"
     override var name = "DramaFun"
@@ -12,13 +12,9 @@ class dramafun : MainAPI() {
     override var lang = "es"
 
     override val supportedTypes = setOf(
-        TvType.TvSeries,
-        TvType.Movie
+        TvType.Movie,
+        TvType.TvSeries
     )
-
-    // ================================
-    // HOME
-    // ================================
 
     override val mainPage = mainPageOf(
         "$mainUrl/category.php?cat=Novelas-y-Telenovelas-Completas&page=" to "Novelas",
@@ -31,8 +27,7 @@ class dramafun : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
 
-        val url = request.data + page
-        val document = app.get(url).document
+        val document = app.get(request.data + page).document
 
         val home = document.select("ul#pm-grid li").mapNotNull {
             it.toSearchResult()
@@ -44,47 +39,34 @@ class dramafun : MainAPI() {
         )
     }
 
-    // ================================
-    // SEARCH
-    // ================================
-
     override suspend fun search(query: String): List<SearchResponse> {
 
-        val url = "$mainUrl/search.php?keywords=${query}"
-        val document = app.get(url).document
+        val document =
+            app.get("$mainUrl/search.php?keywords=$query").document
 
         return document.select("ul#pm-grid li").mapNotNull {
             it.toSearchResult()
         }
     }
 
-    // ================================
-    // LOAD
-    // ================================
-
     override suspend fun load(url: String): LoadResponse {
 
         val document = app.get(url).document
 
         val title =
-            document.selectFirst("meta[property=og:title]")?.attr("content")
+            document.selectFirst("meta[property=og:title]")
+                ?.attr("content")
                 ?: document.title()
 
         val poster =
-            document.selectFirst("meta[property=og:image]")?.attr("content")
+            document.selectFirst("meta[property=og:image]")
+                ?.attr("content")
 
-        val iframe =
-            document.selectFirst("iframe")?.attr("src")
+        val description =
+            document.selectFirst("meta[name=description]")
+                ?.attr("content")
 
-        val plot =
-            document.selectFirst("meta[name=description]")?.attr("content")
-
-        val episode = newEpisode(
-            url,
-        ) {
-            this.name = title
-            this.posterUrl = poster
-        }
+        val episode = newEpisode(url)
 
         return newMovieLoadResponse(
             title,
@@ -93,13 +75,9 @@ class dramafun : MainAPI() {
             listOf(episode)
         ) {
             posterUrl = poster
-            plot = plot
+            plot = description
         }
     }
-
-    // ================================
-    // LINKS
-    // ================================
 
     override suspend fun loadLinks(
         data: String,
@@ -114,35 +92,32 @@ class dramafun : MainAPI() {
             document.selectFirst("iframe")?.attr("src")
 
         if (iframe != null) {
-
             loadExtractor(
                 iframe,
                 mainUrl,
                 subtitleCallback,
                 callback
             )
-
         }
 
         return true
     }
 
-    // ================================
-    // PARSER
-    // ================================
-
     private fun Element.toSearchResult(): SearchResponse? {
 
         val link =
-            this.selectFirst("a[href*=watch.php]")?.attr("href")
+            this.selectFirst("a[href*=watch.php]")
+                ?.attr("href")
                 ?: return null
 
         val title =
-            this.selectFirst(".caption h3 a")?.text()
+            this.selectFirst(".caption h3 a")
+                ?.text()
                 ?: return null
 
         val poster =
-            this.selectFirst("img")?.attr("data-echo")
+            this.selectFirst("img")
+                ?.attr("data-echo")
 
         return newMovieSearchResponse(
             title,
