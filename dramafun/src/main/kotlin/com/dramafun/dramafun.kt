@@ -66,7 +66,7 @@ class DramaFun : MainAPI() {
         return allItems
     }
 
-    // ================= Limpieza y deduplicación (mejorado para novelas) =================
+    // ================= Limpieza y deduplicación (mejorada para películas y episodios) =================
     private fun cleanAndDeduplicate(items: List<SearchResponse>): List<SearchResponse> {
         val seenByUrl = mutableSetOf<String>()
         val seenByName = mutableMapOf<String, SearchResponse>()
@@ -75,21 +75,23 @@ class DramaFun : MainAPI() {
             if (item.url in seenByUrl) return@forEach
             seenByUrl.add(item.url)
 
-            // Regex más amplio para novelas turcas y telenovelas
+            // Regex mejorado para limpiar títulos sucios
             val baseName = item.name
-                .replace(Regex("(?i)(capitulo|episodio|final|completo|online|sub español|HD|audio latino|en español|turca|telenovela|\\d+:\\d+:\\d+|\\(\\d+\\)|\\d+).*"), "")
+                .replace(Regex("(?i)(ver|online|sub español|latino|HD|completo|audio|en español|capitulo|episodio|final|\\.\\(\\)|\\(\\)|\\d+:\\d+:\\d+|\\(\\d+\\)|\\d+).*"), "")
                 .replace(Regex("\\s+"), " ")
                 .trim()
                 .lowercase()
 
             if (baseName.isNotBlank()) {
                 if (!seenByName.containsKey(baseName)) {
+                    // Título limpio para mostrar
                     val cleanDisplayName = item.name
-                        .replace(Regex("(?i)(capitulo|episodio|final|completo).*"), "")
+                        .replace(Regex("(?i)(ver|online|sub español|latino|HD|completo|audio|en español|capitulo|episodio|final|\\.\\(\\)|\\(\\)).*"), "")
+                        .replace(Regex("\\s+"), " ")
                         .trim()
 
                     val newItem = newTvSeriesSearchResponse(
-                        name = cleanDisplayName,
+                        name = cleanDisplayName.ifBlank { item.name },
                         url = item.url
                     ) {
                         posterUrl = item.posterUrl
@@ -98,7 +100,6 @@ class DramaFun : MainAPI() {
                     seenByName[baseName] = newItem
                 }
             } else {
-                // Fallback para películas o items sin nombre parseable
                 seenByName[item.url] = item
             }
         }
@@ -239,6 +240,7 @@ class DramaFun : MainAPI() {
             ?: ownText().trim().ifEmpty { attr("title") }
             ?: return null
 
+        // Limpieza básica aquí también
         val cleanTitle = titleRaw.replace(Regex("(?i)\\[|\\]|\\(en\\s*Español\\)|Sub\\s*Español|HD|online"), "").trim()
 
         val posterRaw = selectFirst("img[data-echo]")?.attr("data-echo")
