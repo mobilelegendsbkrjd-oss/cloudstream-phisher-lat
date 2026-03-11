@@ -14,7 +14,8 @@ class DramaFun : MainAPI() {
     override var lang = "es"
 
     override val supportedTypes = setOf(
-        TvType.TvSeries
+        TvType.TvSeries,
+        TvType.Movie
     )
 
     // ================= HOME =================
@@ -24,12 +25,17 @@ class DramaFun : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
 
-        val list = getCategory("$mainUrl/category.php?cat=Novelas-y-Telenovelas-Completas&page=$page")
+        val home = mutableListOf<HomePageList>()
 
-        return newHomePageResponse(
-            listOf(HomePageList("Novelas y Telenovelas", list)),
-            false
-        )
+        val top = getCategory("$mainUrl/topvideos.php")
+        val peliculas = getCategory("$mainUrl/category.php?cat=peliculas-audio-espanol-latino")
+        val doramas = getCategory("$mainUrl/category.php?cat=Doramas-Sub-Espanol")
+
+        home.add(HomePageList("Top Videos", top))
+        home.add(HomePageList("Películas Latino", peliculas))
+        home.add(HomePageList("Doramas Sub Español", doramas))
+
+        return newHomePageResponse(home)
     }
 
     // ================= CATEGORY =================
@@ -56,41 +62,45 @@ class DramaFun : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
 
-        var fixedUrl = url
+        val doc = app.get(url).document
 
-        // Si entramos a watch.php → buscar la serie
-        if (url.contains("watch.php")) {
+        val title =
+            doc.selectFirst("h1")?.text()
+                ?: doc.selectFirst("h2")?.text()
+                ?: "Drama"
 
-            val doc = app.get(url).document
+        val poster =
+            doc.selectFirst(".pm-video-thumb img")
+                ?.attr("src")
 
-            doc.selectFirst("a[href*=view-serie]")
-                ?.attr("href")
-                ?.let {
-                    fixedUrl = "$mainUrl/$it"
+        val episodes = doc.select("ul.s a")
+
+        if (episodes.isNotEmpty()) {
+
+            val epList = episodes.map {
+
+                val epUrl = "$mainUrl/${it.attr("href")}"
+
+                newEpisode(epUrl) {
+                    name = "Episodio ${it.text()}"
                 }
-        }
+            }
 
-        val doc = app.get(fixedUrl).document
-
-        val title = doc.selectFirst("h1")?.text() ?: "Drama"
-
-        val poster = doc.selectFirst(".pm-video-thumb img")
-            ?.attr("src")
-
-        val episodes = doc.select("ul.s a").map {
-
-            val epUrl = "$mainUrl/${it.attr("href")}"
-
-            newEpisode(epUrl) {
-                name = "Episodio ${it.text()}"
+            return newTvSeriesLoadResponse(
+                title,
+                url,
+                TvType.TvSeries,
+                epList
+            ) {
+                posterUrl = poster
             }
         }
 
-        return newTvSeriesLoadResponse(
+        return newMovieLoadResponse(
             title,
-            fixedUrl,
-            TvType.TvSeries,
-            episodes
+            url,
+            TvType.Movie,
+            url
         ) {
             posterUrl = poster
         }
@@ -112,9 +122,8 @@ class DramaFun : MainAPI() {
 
         val post = enfun.substringAfter("post=")
 
-        val decoded = String(
-            Base64.decode(post, Base64.DEFAULT)
-        )
+        val decoded =
+            String(Base64.decode(post, Base64.DEFAULT))
 
         val json = JSONObject(decoded)
 
@@ -143,12 +152,14 @@ class DramaFun : MainAPI() {
 
     private fun Element.toSearchResult(): SearchResponse? {
 
-        val link = selectFirst("a")?.attr("href") ?: return null
+        val link =
+            selectFirst("a")?.attr("href") ?: return null
 
-        val title = selectFirst("h3")?.text() ?: return null
+        val title =
+            selectFirst("h3")?.text() ?: return null
 
-        val poster = selectFirst("img.pm-thumb")
-            ?.attr("src")
+        val poster =
+            selectFirst("img")?.attr("src")
 
         val fixedLink =
             if (link.startsWith("http"))
