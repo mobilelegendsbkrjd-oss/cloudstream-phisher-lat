@@ -90,7 +90,7 @@ data class VideoInfo(
 // MAIN API
 // =============================
 class Cuevana : MainAPI() {
-    override var mainUrl = "https://cuevana3.re/"
+    override var mainUrl = "https://cuevana3re.net/"
     override var name = "Cuevana"
     override var lang = "es"
     override val hasMainPage = true
