@@ -1,12 +1,12 @@
-package com.sololatino
+package com.monoschinos3
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 import android.content.Context
 
 @CloudstreamPlugin
-class SoloLatinoPlugin : Plugin() {
+class Monoschinos3Plugin: Plugin() {
     override fun load(context: Context) {
-        registerMainAPI(SoloLatino())
+        registerMainAPI(Monoschinos3())
     }
 }

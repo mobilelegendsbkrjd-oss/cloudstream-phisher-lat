@@ -1,12 +1,12 @@
-package com.monoschinos
+package com.series24
 
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 import android.content.Context
 
 @CloudstreamPlugin
-class MonoschinosPlugin: Plugin() {
+class Series24Plugin : Plugin() {
     override fun load(context: Context) {
-        registerMainAPI(Monoschinos())
+        registerMainAPI(Series24())
     }
 }

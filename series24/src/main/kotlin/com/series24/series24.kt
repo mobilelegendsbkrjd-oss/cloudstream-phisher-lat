@@ -2,257 +2,300 @@ package com.series24
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import kotlinx.coroutines.delay
 import org.jsoup.nodes.Element
 
 class Series24 : MainAPI() {
 
-    override var mainUrl = "https://cc5w.series24.cc"
+    override var mainUrl = "https://series24.app"
     override var name = "Series24"
     override var lang = "es"
-    override val supportedTypes = setOf(TvType.TvSeries)
     override val hasMainPage = true
+    override val hasChromecastSupport = true
+    override val hasDownloadSupport = true
 
-    override val mainPage = mainPageOf(
-        "$mainUrl/serie-completa/" to "🎬 Series Completas",
-        "$mainUrl/series-genero/accion/" to "🔥 Acción",
-        "$mainUrl/series-genero/drama/" to "🎭 Drama",
-        "$mainUrl/series-genero/comedia/" to "😂 Comedia",
-        "$mainUrl/series-genero/ciencia-ficcion/" to "🚀 Ciencia Ficción",
-        "$mainUrl/series-genero/terror/" to "👻 Terror",
-        "$mainUrl/series-genero/animacion/" to "🐱 Animación",
-        "$mainUrl/series-genero/novelas/" to "📖 Novelas",
-        "$mainUrl/series-genero/anime/" to "🇯🇵 Anime"
+    override val supportedTypes = setOf(
+        TvType.TvSeries,
+        TvType.Movie,
+        TvType.Anime
     )
 
-    /* =======================
-       Helpers
-       ======================= */
+    // Headers
+    private val headers = mapOf(
+        "User-Agent" to USER_AGENT,
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language" to "es-ES,es;q=0.8,en-US;q=0.5,en;q=0.3",
+        "Connection" to "keep-alive",
+        "Upgrade-Insecure-Requests" to "1"
+    )
 
-    private fun getPoster(el: Element?): String? {
-        if (el == null) return null
-        return el.attr("data-src")
-            .ifBlank { el.attr("src") }
-            .takeIf { it.isNotBlank() && !it.startsWith("data:") }
-            ?.let { fixUrl(it) }
+    private val ajaxHeaders = mapOf(
+        "User-Agent" to USER_AGENT,
+        "Accept" to "*/*",
+        "Accept-Language" to "es-ES,es;q=0.8,en-US;q=0.5,en;q=0.3",
+        "Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Requested-With" to "XMLHttpRequest"
+    )
+
+    // =============================
+    // HELPERS
+    // =============================
+
+    private suspend fun safeGet(url: String, retries: Int = 3): String? {
+        repeat(retries) {
+            try {
+                return app.get(url, headers = headers, timeout = 30).text
+            } catch (_: Exception) {
+                delay(500)
+            }
+        }
+        return null
     }
 
-    /* =======================
-       Main Page
-       ======================= */
+    private fun getPoster(el: Element?): String? {
+        val style = el?.attr("style") ?: return null
+        return style.substringAfter("url(")
+            .substringBefore(")")
+            .replace("\"", "")
+            .replace("'", "")
+            .ifEmpty { null }
+    }
+
+    private fun getImage(el: Element?): String? {
+        if (el == null) return null
+
+        val attrs = listOf(
+            "data-src",
+            "data-lazy-src",
+            "src"
+        )
+
+        for (attr in attrs) {
+            val src = el.attr(attr)
+            if (src.isNotBlank() && !src.startsWith("data:image")) {
+                return src
+            }
+        }
+
+        return null
+    }
+
+    // =============================
+    // MAIN PAGE
+    // =============================
 
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
 
-        val url = if (page > 1) "${request.data}page/$page/" else request.data
-        val doc = app.get(url).document
+        val url = if (page == 1)
+            request.data
+        else
+            "${request.data}/page/$page"
 
-        val items = doc.select("article.item").mapNotNull { article ->
-            val link = article.selectFirst("a") ?: return@mapNotNull null
-            val title = article.selectFirst("h3")?.text()?.trim() ?: return@mapNotNull null
-            val poster = getPoster(article.selectFirst("img"))
+        val doc = app.get(url, headers = headers).document
 
-            newTvSeriesSearchResponse(
-                title,
-                fixUrl(link.attr("href")),
-                TvType.TvSeries
-            ) {
-                posterUrl = poster
+        val items = doc.select("article.item, div.item, div.list-movie, div.post").mapNotNull { item ->
+
+            val link = item.selectFirst("a")
+                ?.attr("href") ?: return@mapNotNull null
+
+            val title = item.selectFirst(".title, h3, h2, .entry-title, .list-title")
+                ?.text() ?: return@mapNotNull null
+
+            val poster = getImage(item.selectFirst("img")) ?: getPoster(item.selectFirst(".media-cover, .poster"))
+
+            val type = when {
+                link.contains("/pelicula/") || link.contains("/movie/") -> TvType.Movie
+                link.contains("/anime/") -> TvType.Anime
+                else -> TvType.TvSeries
+            }
+
+            when (type) {
+                TvType.Movie -> newMovieSearchResponse(title, fixUrl(link), type) {
+                    this.posterUrl = poster?.let { fixUrl(it) }
+                }
+                TvType.TvSeries -> newTvSeriesSearchResponse(title, fixUrl(link), type) {
+                    this.posterUrl = poster?.let { fixUrl(it) }
+                }
+                else -> newAnimeSearchResponse(title, fixUrl(link), type) {
+                    this.posterUrl = poster?.let { fixUrl(it) }
+                }
             }
         }
 
-        return newHomePageResponse(
-            HomePageList(request.name, items, false),
-            hasNext = doc.select(".pagination a.next, a:contains(Siguiente)").isNotEmpty()
+        val hasNext = doc.select(".pagination .next, .nav-links .next, .pagination a:contains(Siguiente)").isNotEmpty()
+
+        return HomePageResponse(
+            listOf(
+                HomePageList(
+                    request.name,
+                    items,
+                    hasNext
+                )
+            )
         )
     }
 
-    /* =======================
-       Search
-       ======================= */
+    // =============================
+    // SEARCH
+    // =============================
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val doc = app.get("$mainUrl/?s=${query.replace(" ", "+")}").document
 
-        return doc.select("article.item").mapNotNull { article ->
-            val link = article.selectFirst("a") ?: return@mapNotNull null
-            val title = article.selectFirst("h3")?.text()?.trim() ?: return@mapNotNull null
-            val poster = getPoster(article.selectFirst("img"))
+        val doc = try {
+            app.get("$mainUrl/search?s=$query", headers = headers).document
+        } catch (_: Exception) {
+            try {
+                app.post(
+                    "$mainUrl/search",
+                    headers = ajaxHeaders,
+                    data = mapOf(
+                        "q" to query,
+                        "action" to "search"
+                    )
+                ).document
+            } catch (_: Exception) {
+                return emptyList()
+            }
+        }
 
-            newTvSeriesSearchResponse(
-                title,
-                fixUrl(link.attr("href")),
-                TvType.TvSeries
-            ) {
-                posterUrl = poster
+        return doc.select("article.item, div.item, div.list-movie, div.post").mapNotNull { item ->
+
+            val link = item.selectFirst("a")
+                ?.attr("href") ?: return@mapNotNull null
+
+            val title = item.selectFirst(".title, h3, h2, .entry-title, .list-title")
+                ?.text() ?: return@mapNotNull null
+
+            val poster = getImage(item.selectFirst("img")) ?: getPoster(item.selectFirst(".media-cover, .poster"))
+
+            val type = when {
+                link.contains("/pelicula/") || link.contains("/movie/") -> TvType.Movie
+                link.contains("/anime/") -> TvType.Anime
+                else -> TvType.TvSeries
+            }
+
+            when (type) {
+                TvType.Movie -> newMovieSearchResponse(title, fixUrl(link), type) {
+                    this.posterUrl = poster?.let { fixUrl(it) }
+                }
+                TvType.TvSeries -> newTvSeriesSearchResponse(title, fixUrl(link), type) {
+                    this.posterUrl = poster?.let { fixUrl(it) }
+                }
+                else -> newAnimeSearchResponse(title, fixUrl(link), type) {
+                    this.posterUrl = poster?.let { fixUrl(it) }
+                }
             }
         }
     }
 
-    /* =======================
-       Load Serie (Página de temporada completa)
-       ======================= */
+    // =============================
+    // LOAD
+    // =============================
 
-    override suspend fun load(url: String): LoadResponse {
-        val doc = app.get(url).document
+    override suspend fun load(url: String): LoadResponse? {
 
-        // Verificar si es página de serie o episodio individual
-        val isEpisodePage = url.contains("/ver-serie-online/")
-        
-        if (isEpisodePage) {
-            return loadEpisodePage(doc, url)
-        } else {
-            return loadSeriesPage(doc, url)
-        }
-    }
+        val doc = app.get(url, headers = headers).document
 
-    private suspend fun loadSeriesPage(doc: Element, url: String): LoadResponse {
-        val title = doc.selectFirst("h1")?.text()?.trim()
-            ?: throw ErrorLoadingException("No title")
+        val title = doc.selectFirst("h1, .entry-title, .title")
+            ?.text() ?: return null
 
-        val poster = getPoster(doc.selectFirst(".poster img"))
-        val plot = doc.selectFirst(".wp-content p")?.text()
+        val poster = getImage(doc.selectFirst(".poster img, .wp-post-image, img"))
+            ?: getPoster(doc.selectFirst(".media-cover, .poster"))
+
+        val plot = doc.selectFirst(".description, .entry-content p, .sinopsis, .content p")
+            ?.text()
+
+        val year = doc.selectFirst(".year, .date")
+            ?.text()?.let {
+                Regex("\\d{4}").find(it)?.value?.toIntOrNull()
+            }
+
+        val tags = doc.select(".genres a, .category a, .tags a")
+            .mapNotNull { it.text() }
 
         val episodes = mutableListOf<Episode>()
 
-        // Intentar obtener episodios de la sección de temporadas
-        doc.select("div.se-c").forEach { season ->
-            val seasonNumber = season.attr("data-season").toIntOrNull()
+        // Intentar encontrar episodios de diferentes formas
+        doc.select(".episode-item a, .episodes a, .temporadas a, .capitulos a").forEach { ep ->
 
-            season.select("li").forEach { ep ->
-                val link = ep.selectFirst("a") ?: return@forEach
-                val epUrl = fixUrl(link.attr("href"))
+            val link = ep.attr("href")
+            val epTitle = ep.text()
 
-                // Extraer número de episodio correctamente
-                val epNumText = ep.selectFirst(".numerando")?.text() ?: ""
-                val epNum = extractEpisodeNumber(epNumText)
+            val episodeNum = Regex("\\d+").find(epTitle)?.value?.toIntOrNull()
 
-                val epTitle = ep.selectFirst(".episodiotitle")?.text()?.trim()
-
-                episodes.add(
-                    newEpisode(epUrl) {
-                        this.name = epTitle
-                        this.season = seasonNumber
-                        this.episode = epNum
-                    }
-                )
-            }
+            episodes.add(
+                newEpisode(link) {
+                    this.name = epTitle
+                    this.episode = episodeNum ?: episodes.size + 1
+                }
+            )
         }
 
-        // Si no hay episodios en div.se-c, buscar en otros lugares
+        // Si no hay episodios pero hay temporadas, intentar cargarlas
         if (episodes.isEmpty()) {
-            doc.select("article.w_item_c").forEach { article ->
-                val link = article.selectFirst("a") ?: return@forEach
-                val epUrl = fixUrl(link.attr("href"))
-                val epTitle = article.selectFirst("h3")?.text()?.trim() ?: return@forEach
-                
-                // Intentar extraer temporada y episodio del título
-                val seasonEpisode = extractSeasonEpisodeFromTitle(epTitle)
-                
-                episodes.add(
-                    newEpisode(epUrl) {
-                        this.name = epTitle
-                        this.season = seasonEpisode?.first
-                        this.episode = seasonEpisode?.second
+            doc.select(".seasons a, .temporadas a").forEach { season ->
+                val seasonLink = season.attr("href")
+                val seasonNum = Regex("\\d+").find(season.text())?.value?.toIntOrNull() ?: 1
+
+                try {
+                    val seasonDoc = app.get(fixUrl(seasonLink), headers = headers).document
+                    seasonDoc.select(".episode-item a, .episodes a, .capitulos a").forEach { ep ->
+                        val link = ep.attr("href")
+                        val epTitle = ep.text()
+                        val episodeNum = Regex("\\d+").find(epTitle)?.value?.toIntOrNull()
+
+                        episodes.add(
+                            newEpisode(link) {
+                                this.name = epTitle
+                                this.season = seasonNum
+                                this.episode = episodeNum ?: 1
+                            }
+                        )
                     }
-                )
+                } catch (_: Exception) {
+                    // Ignorar errores en temporadas individuales
+                }
             }
         }
 
-        return newTvSeriesLoadResponse(
-            title,
-            url,
-            TvType.TvSeries,
-            episodes
-        ) {
-            posterUrl = poster
-            this.plot = plot
-        }
-    }
-
-    private suspend fun loadEpisodePage(doc: Element, url: String): LoadResponse {
-        val title = doc.selectFirst("h1.epih1")?.text()?.trim()
-            ?: doc.selectFirst("h1")?.text()?.trim()
-            ?: throw ErrorLoadingException("No title")
-
-        val poster = getPoster(doc.selectFirst(".poster img"))
-        val plot = doc.selectFirst("#info .wp-content")?.text()
-            ?: doc.selectFirst("h3.epih3")?.text()?.trim()
-
-        // Extraer información de temporada/episodio del título o URL
-        val seasonEpisode = extractSeasonEpisodeFromTitle(title)
-        
-        // Crear un solo episodio usando newEpisode
-        val episode = newEpisode(url) {
-            this.name = title
-            this.season = seasonEpisode?.first
-            this.episode = seasonEpisode?.second
-            this.posterUrl = poster
-        }
-
-        return newTvSeriesLoadResponse(
-            title,
-            url,
-            TvType.TvSeries,
-            listOf(episode)
-        ) {
-            posterUrl = poster
-            this.plot = plot
-        }
-    }
-
-    /* =======================
-       Helper para extraer número de episodio
-       ======================= */
-
-    private fun extractEpisodeNumber(text: String): Int? {
-        // Ejemplo: "1 - 1" o "1x1" o "S01E01"
-        return when {
-            text.contains("-") -> {
-                text.split("-").lastOrNull()?.filter { it.isDigit() }?.toIntOrNull()
-            }
-            text.contains("x") -> {
-                text.split("x").lastOrNull()?.filter { it.isDigit() }?.toIntOrNull()
-            }
+        val type = when {
+            url.contains("/pelicula/") || url.contains("/movie/") -> TvType.Movie
+            url.contains("/anime/") -> TvType.Anime
             else -> {
-                text.filter { it.isDigit() }.toIntOrNull()
+                if (episodes.isEmpty()) TvType.Movie else TvType.TvSeries
+            }
+        }
+
+        return when (type) {
+            TvType.Movie -> newMovieLoadResponse(title, url, TvType.Movie, url) {
+                this.posterUrl = poster?.let { fixUrl(it) }
+                this.plot = plot
+                this.year = year
+                this.tags = tags
+            }
+
+            TvType.TvSeries -> newTvSeriesLoadResponse(title, url, type, episodes) {
+                this.posterUrl = poster?.let { fixUrl(it) }
+                this.plot = plot
+                this.year = year
+                this.tags = tags
+            }
+
+            else -> newTvSeriesLoadResponse(title, url, type, episodes) {
+                this.posterUrl = poster?.let { fixUrl(it) }
+                this.plot = plot
+                this.year = year
+                this.tags = tags
             }
         }
     }
 
-    private fun extractSeasonEpisodeFromTitle(title: String): Pair<Int?, Int?> {
-        // Patrones comunes: "1x1", "S01E01", "Temporada 1 Episodio 1", "1x01"
-        val patterns = listOf(
-            """(\d+)[x×](\d+)""".toRegex(RegexOption.IGNORE_CASE), // 1x1, 1x01
-            """S(\d+)\s*E(\d+)""".toRegex(RegexOption.IGNORE_CASE), // S01E01
-            """Temporada\s+(\d+).*?Episodio\s+(\d+)""".toRegex(RegexOption.IGNORE_CASE)
-        )
-
-        for (pattern in patterns) {
-            val match = pattern.find(title)
-            if (match != null && match.groupValues.size >= 3) {
-                val season = match.groupValues[1].toIntOrNull()
-                val episode = match.groupValues[2].toIntOrNull()
-                return Pair(season, episode)
-            }
-        }
-        
-        // Intentar extraer de la URL
-        val urlPattern = """(\d+)x(\d+)""".toRegex()
-        val urlMatch = urlPattern.find(title)
-        if (urlMatch != null && urlMatch.groupValues.size >= 3) {
-            val season = urlMatch.groupValues[1].toIntOrNull()
-            val episode = urlMatch.groupValues[2].toIntOrNull()
-            return Pair(season, episode)
-        }
-
-        return Pair(null, null)
-    }
-
-    /* =======================
-       Links - MEJORADO para manejar múltiples servidores
-       ======================= */
+    // =============================
+    // LOAD LINKS
+    // =============================
 
     override suspend fun loadLinks(
         data: String,
@@ -261,63 +304,100 @@ class Series24 : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        val doc = app.get(data).document
+        val doc = app.get(data, headers = headers).document
         var found = false
 
-        // PRIMERO: Probar los enlaces de player option (AJAX)
-        doc.select(".dooplay_player_option").forEach { opt ->
-            val post = opt.attr("data-post")
-            val nume = opt.attr("data-nume")
-            val type = opt.attr("data-type")
+        // 1. Buscar data-id para AJAX
+        val dataId = doc.selectFirst("[data-id], [data-post], [data-embed]")
+            ?.attr("data-id") ?: doc.selectFirst("input[name=post_id]")
+            ?.attr("value")
 
-            if (post.isBlank() || nume.isBlank() || type.isBlank()) return@forEach
-
+        if (!dataId.isNullOrBlank()) {
             try {
-                val res = app.post(
+                val ajaxResponse = app.post(
                     "$mainUrl/wp-admin/admin-ajax.php",
-                    data = mapOf(
-                        "action" to "doo_player_ajax",
-                        "post" to post,
-                        "nume" to nume,
-                        "type" to type
-                    ),
+                    headers = ajaxHeaders,
                     referer = data,
-                    headers = mapOf("X-Requested-With" to "XMLHttpRequest")
-                ).parsedSafe<Map<String, String>>() ?: return@forEach
+                    data = mapOf(
+                        "action" to "get_embed",
+                        "id" to dataId,
+                        "post_id" to dataId
+                    )
+                ).text
 
-                val embed = res["embed_url"] ?: return@forEach
-                loadExtractor(embed, data, subtitleCallback, callback)
-                found = true
-            } catch (e: Exception) {
-                // Continuar con otros métodos si este falla
-                e.printStackTrace()
+                // Buscar iframe en respuesta AJAX
+                Regex("""src=["'](https?://[^"']+)["']""").findAll(ajaxResponse)
+                    .forEach { match ->
+                        val iframeUrl = match.groupValues[1]
+                        if (iframeUrl.isNotBlank()) {
+                            loadExtractor(iframeUrl, data, subtitleCallback, callback)
+                            found = true
+                        }
+                    }
+
+            } catch (_: Exception) {
+                // Ignorar error AJAX
             }
         }
 
-        // SEGUNDO: Si no se encontraron enlaces AJAX, buscar en las tablas de enlaces
+        // 2. Buscar iframes directos
         if (!found) {
-            // Buscar en la tabla de "Ver en línea"
-            doc.select("#videos table tbody tr").forEach { row ->
-                val linkElement = row.selectFirst("td a[href]") ?: return@forEach
-                val link = linkElement.attr("href")
-                
-                if (link.isNotBlank() && !link.startsWith("javascript:")) {
-                    loadExtractor(link, data, subtitleCallback, callback)
+            doc.select("iframe").forEach { iframe ->
+                val src = iframe.attr("src")
+                if (src.startsWith("http")) {
+                    loadExtractor(src, data, subtitleCallback, callback)
                     found = true
                 }
             }
         }
 
-        // TERCERO: También revisar enlaces de descarga como respaldo
+        // 3. Buscar enlaces directos a videos
         if (!found) {
-            doc.select("#download table tbody tr").forEach { row ->
-                val linkElement = row.selectFirst("td a[href]") ?: return@forEach
-                val link = linkElement.attr("href")
-                
-                if (link.isNotBlank() && !link.startsWith("javascript:")) {
-                    loadExtractor(link, data, subtitleCallback, callback)
+            doc.select("video source, source[type*='video']").forEach { source ->
+                val videoUrl = source.attr("src")
+                if (videoUrl.startsWith("http")) {
+                    // CORREGIDO: newExtractorLink sin parámetro referer (se pasa en el bloque)
+                    callback.invoke(
+                        newExtractorLink(
+                            source = name,
+                            name = "Video Directo",
+                            url = videoUrl
+                        ) {
+                            this.quality = Qualities.Unknown.value
+                            this.referer = data
+                        }
+                    )
                     found = true
                 }
+            }
+        }
+
+        // 4. Intentar con el método original de Series24 (AJAX específico)
+        if (!found) {
+            try {
+                val id = doc.selectFirst("[data-id]")?.attr("data-id")
+                if (!id.isNullOrBlank()) {
+                    val res = app.post(
+                        "$mainUrl/ajax/embed",
+                        headers = ajaxHeaders,
+                        referer = data,
+                        data = mapOf(
+                            "id" to id,
+                            "self" to id
+                        )
+                    ).text
+
+                    Regex("""src=["'](https?://[^"']+)["']""").findAll(res)
+                        .forEach { match ->
+                            val iframe = match.groupValues[1]
+                            if (iframe.startsWith("http")) {
+                                loadExtractor(iframe, data, subtitleCallback, callback)
+                                found = true
+                            }
+                        }
+                }
+            } catch (_: Exception) {
+                // Ignorar error del método original
             }
         }
 

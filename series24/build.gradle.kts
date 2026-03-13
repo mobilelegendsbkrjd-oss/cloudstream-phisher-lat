@@ -1,13 +1,12 @@
 // use an integer for version numbers
-version = 5
-
+version = 6
 
 cloudstream {
     // All of these properties are optional, you can safely remove them
 
-    description = "(Mexican) Anime Extension"
+    description = "TvSeries"
     language    = "mx"
-    authors = listOf("Phisher98")
+    authors = listOf("bkrjd")
 
     /**
     * Status int as the following:
