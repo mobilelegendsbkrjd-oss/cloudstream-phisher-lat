@@ -1,9 +1,9 @@
 package com.sololatino
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.*
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
 class SoloLatino : MainAPI() {
@@ -23,277 +23,100 @@ class SoloLatino : MainAPI() {
         TvType.Cartoon,
     )
 
-    private val sagasJsonUrl =
-        "https://raw.githubusercontent.com/mobilelegendsbkrjd-oss/lat_cs_bkrjd/main/ListasSL.json"
-
     // =========================
-    // HOMEPAGE CACHE (24H)
+    // SAFE GET
     // =========================
-
-    private var cachedHome: HomePageResponse? = null
-    private var cacheTime: Long = 0
-    private val cacheDuration = 24 * 60 * 60 * 1000L
-
-    // =========================
-    // NETWORK STABILITY
-    // =========================
-
-    private suspend fun safeGet(url: String, retries: Int = 3): String? {
-        repeat(retries) {
-            try {
-                return app.get(url, timeout = 30).text
-            } catch (_: Exception) {
-                delay(600)
-            }
+    private suspend fun safeGet(url: String, referer: String = mainUrl): String? {
+        return try {
+            app.get(
+                url,
+                timeout = 30,
+                headers = mapOf(
+                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                    "Accept" to "*/*",
+                    "Referer" to referer,
+                    "Origin" to mainUrl,
+                    "Connection" to "keep-alive"
+                )
+            ).text
+        } catch (_: Exception) {
+            null
         }
-        return null
     }
 
     // =========================
-    // IMAGE EXTRACTION
+    // IMAGE
     // =========================
-
-    private fun bestSrcset(srcset: String?): String? {
-        if (srcset.isNullOrBlank()) return null
-        val sources = srcset.split(",")
-        var best: String? = null
-        var size = 0
-
-        for (s in sources) {
-            val p = s.trim().split(" ")
-            if (p.size >= 2) {
-                val w = p[1].replace("w", "").toIntOrNull() ?: 0
-                if (w > size) {
-                    size = w
-                    best = p[0]
-                }
-            }
-        }
-        return best ?: sources.first().trim().split(" ").first()
-    }
-
     private fun getImage(el: Element?): String? {
-        if (el == null) return null
-
-        val attrs = listOf(
-            "data-srcset",
-            "data-src",
-            "data-litespeed-src",
-            "data-lazy-src",
-            "srcset",
-            "src"
-        )
-
-        for (attr in attrs) {
-            val v = el.attr(attr)
-            if (v.isNotBlank() && !v.startsWith("data:image")) {
-                return if (attr.contains("srcset"))
-                    bestSrcset(v)
-                else v
-            }
-        }
-
-        return null
+        return el?.attr("src")
+            ?: el?.attr("data-src")
+            ?: el?.attr("data-lazy-src")
     }
 
     // =========================
     // MAIN PAGE
     // =========================
-
-    @Suppress("DEPRECATION")
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
-    ): HomePageResponse? = coroutineScope {
-
-        val now = System.currentTimeMillis()
-
-        if (page == 1 && cachedHome != null && now - cacheTime < cacheDuration) {
-            return@coroutineScope cachedHome
-        }
+    ): HomePageResponse {
 
         val sections = listOf(
-            "🔥 Sagas" to sagasJsonUrl,
-            "🎥 Películas" to "$mainUrl/peliculas",
-            "📺 Series" to "$mainUrl/series",
-            "🌸 Animes" to "$mainUrl/animes",
-            "🦁 Cartoons" to "$mainUrl/genre_series/toons",
-            "💕 Doramas" to "$mainUrl/genre_series/kdramas/",
-            "🎬 Netflix" to "$mainUrl/network/netflix/",
-            "🟠 Amazon" to "$mainUrl/network/amazon/",
-            "🐭 Disney+" to "$mainUrl/network/disney/",
-            "🟣 HBO Max" to "$mainUrl/network/hbo-max/",
-            "🍎 Apple TV" to "$mainUrl/network/apple-tv/",
-            "🟢 Hulu" to "$mainUrl/network/hulu/",
-            "🏔️ Paramount+" to "$mainUrl/network/paramount/"
+            "Películas" to "$mainUrl/peliculas",
+            "Series" to "$mainUrl/series",
+            "Animes" to "$mainUrl/animes"
         )
 
-        val items = mutableListOf<HomePageList>()
+        val lists = mutableListOf<HomePageList>()
 
-        sections.chunked(3).forEach { batch ->
+        for ((name, url) in sections) {
 
-            val tasks: List<Deferred<HomePageList?>> = batch.map { (name, url) ->
-                async {
+            val html = safeGet(url) ?: continue
+            val doc = Jsoup.parse(html)
 
-                    try {
+            val cards = doc.select("div.card, article.item")
 
-                        val tvType =
-                            if (name == "🎥 Películas") TvType.Movie
-                            else TvType.TvSeries
+            val items = cards.mapNotNull { card ->
 
-                        val home = if (name == "🔥 Sagas") {
+                val a = card.selectFirst("a") ?: return@mapNotNull null
+                val link = a.attr("href").let {
+                    if (it.startsWith("/")) "$mainUrl$it" else it
+                }
 
-                            val jsonText = safeGet(url)?.trim() ?: return@async null
-                            val sagas = mutableListOf<SearchResponse>()
+                val title = card.text()
+                val poster = getImage(card.selectFirst("img"))
 
-                            val cleanJson =
-                                jsonText.removePrefix("[")
-                                    .removeSuffix("]")
-                                    .trim()
-
-                            if (cleanJson.isNotEmpty()) {
-
-                                val objs =
-                                    cleanJson.split("},")
-                                        .map { it.trim() + "}" }
-
-                                objs.forEach { obj ->
-
-                                    try {
-
-                                        val title =
-                                            Regex(""""title"\s*:\s*"([^"]*)"""")
-                                                .find(obj)
-                                                ?.groupValues?.get(1)
-                                                ?: return@forEach
-
-                                        val link =
-                                            Regex(""""url"\s*:\s*"([^"]*)"""")
-                                                .find(obj)
-                                                ?.groupValues?.get(1)
-                                                ?: return@forEach
-
-                                        val poster =
-                                            Regex(""""poster"\s*:\s*"([^"]*)"""")
-                                                .find(obj)
-                                                ?.groupValues?.get(1)
-
-                                        sagas.add(
-                                            newTvSeriesSearchResponse(
-                                                title,
-                                                link,
-                                                tvType
-                                            ) {
-                                                posterUrl = poster
-                                            }
-                                        )
-
-                                    } catch (_: Exception) {}
-                                }
-                            }
-
-                            sagas
-
-                        } else {
-
-                            val finalUrl =
-                                if (page > 1) "$url/page/$page/"
-                                else url
-
-                            val html =
-                                safeGet(finalUrl) ?: return@async null
-
-                            val doc =
-                                org.jsoup.Jsoup.parse(html)
-
-                            doc.select("div.items article.item")
-                                .mapNotNull {
-
-                                    val title =
-                                        it.selectFirst("a div.data h3")?.text()
-                                            ?: return@mapNotNull null
-
-                                    val link =
-                                        it.selectFirst("a")?.attr("href")
-                                            ?: return@mapNotNull null
-
-                                    val img =
-                                        getImage(
-                                            it.selectFirst("div.poster img")
-                                        )
-
-                                    newTvSeriesSearchResponse(
-                                        title,
-                                        link,
-                                        tvType,
-                                        true
-                                    ) {
-                                        posterUrl = img
-                                    }
-                                }
-                        }
-
-                        if (home.isNotEmpty())
-                            HomePageList(name, home)
-                        else null
-
-                    } catch (_: Exception) {
-                        return@async null
-                    }
+                newTvSeriesSearchResponse(title, link, TvType.TvSeries) {
+                    posterUrl = poster
                 }
             }
 
-            val batchItems =
-                tasks.awaitAll().filterNotNull()
-
-            items.addAll(batchItems)
+            if (items.isNotEmpty())
+                lists.add(HomePageList(name, items))
         }
 
-        val response = newHomePageResponse(items)
-
-        if (page == 1) {
-            cachedHome = response
-            cacheTime = System.currentTimeMillis()
-        }
-
-        return@coroutineScope response
+        return newHomePageResponse(lists)
     }
 
     // =========================
     // SEARCH
     // =========================
-
     override suspend fun search(query: String): List<SearchResponse> {
 
         return try {
 
-            val doc =
-                app.get("$mainUrl/?s=$query").document
+            val doc = app.get("$mainUrl/buscar?q=${query.replace(" ", "+")}").document
 
-            doc.select("div.items article.item")
-                .mapNotNull {
+            doc.select("div.card, article.item").mapNotNull {
 
-                    val title =
-                        it.selectFirst("a div.data h3")?.text()
-                            ?: return@mapNotNull null
+                val link = it.selectFirst("a")?.attr("href") ?: return@mapNotNull null
+                val title = it.text()
+                val poster = getImage(it.selectFirst("img"))
 
-                    val link =
-                        it.selectFirst("a")?.attr("href")
-                            ?: return@mapNotNull null
-
-                    val img =
-                        getImage(
-                            it.selectFirst("div.poster img")
-                        )
-
-                    newTvSeriesSearchResponse(
-                        title,
-                        link,
-                        TvType.TvSeries
-                    ) {
-                        posterUrl = img
-                    }
+                newTvSeriesSearchResponse(title, link, TvType.TvSeries) {
+                    posterUrl = poster
                 }
+            }
 
         } catch (_: Exception) {
             emptyList()
@@ -303,106 +126,54 @@ class SoloLatino : MainAPI() {
     // =========================
     // LOAD
     // =========================
-
     override suspend fun load(url: String): LoadResponse? {
 
-        val doc = app.get(url).document
+        val html = safeGet(url, mainUrl) ?: return null
+        val doc = Jsoup.parse(html)
 
-        val tvType =
-            if (url.contains("peliculas"))
-                TvType.Movie
-            else TvType.TvSeries
+        val title = doc.selectFirst("h1")?.text()?.trim() ?: return null
 
-        val title =
-            doc.selectFirst("div.data h1")?.text() ?: ""
+        val poster = Regex("""https://image\.tmdb\.org/t/p/[^"]+""")
+            .find(html)
+            ?.value
 
-        val poster =
-            getImage(doc.selectFirst("div.poster img"))
+        val description = doc.selectFirst("meta[name=description]")
+            ?.attr("content")
+            ?: ""
 
-        val backimage =
-            doc.selectFirst(".wallpaper")
-                ?.attr("style")
-                ?.substringAfter("url(")
-                ?.substringBefore(");")
+        val isMovie = url.contains("/pelicula/")
 
-        val description =
-            doc.selectFirst("div.wp-content")?.text() ?: ""
-
-        val episodes =
-            if (tvType == TvType.TvSeries) {
-
-                doc.select("div#seasons div.se-c")
-                    .flatMap { season ->
-
-                        season.select("ul.episodios li")
-                            .mapNotNull {
-
-                                val epurl =
-                                    it.selectFirst("a")
-                                        ?.attr("href")
-                                        ?: return@mapNotNull null
-
-                                val epTitle =
-                                    it.selectFirst(
-                                        "div.episodiotitle div.epst"
-                                    )?.text() ?: ""
-
-                                newEpisode(epurl) {
-
-                                    name = epTitle
-
-                                    posterUrl =
-                                        getImage(
-                                            it.selectFirst(
-                                                "div.imagen img"
-                                            )
-                                        )
-                                }
-                            }
+        return if (isMovie) {
+            newMovieLoadResponse(
+                title,
+                url, // 🔥 IMPORTANTE: NO embed69
+                TvType.Movie,
+                url
+            ) {
+                this.posterUrl = poster
+                this.plot = description
+            }
+        } else {
+            // 🔥 SERIES: usamos misma URL como episodio único
+            newTvSeriesLoadResponse(
+                title,
+                url,
+                TvType.TvSeries,
+                listOf(
+                    newEpisode(url) {
+                        this.name = "Ver"
                     }
-
-            } else emptyList()
-
-        return when (tvType) {
-
-            TvType.TvSeries ->
-                newTvSeriesLoadResponse(
-                    title,
-                    url,
-                    tvType,
-                    episodes
-                ) {
-
-                    posterUrl = poster
-                    backgroundPosterUrl =
-                        backimage ?: poster
-
-                    plot = description
-                }
-
-            TvType.Movie ->
-                newMovieLoadResponse(
-                    title,
-                    url,
-                    tvType,
-                    url
-                ) {
-
-                    posterUrl = poster
-                    backgroundPosterUrl =
-                        backimage ?: poster
-
-                    plot = description
-                }
-
-            else -> null
+                )
+            ) {
+                this.posterUrl = poster
+                this.plot = description
+            }
         }
     }
 
     // =========================
-    // LINKS
+    // LOAD LINKS (REAL FIX)
     // =========================
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -410,39 +181,90 @@ class SoloLatino : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        try {
+        val html = safeGet(data, mainUrl) ?: return false
 
-            val doc =
-                app.get(data).document
+        // 🔥 1. buscar embed69 directo (ESTO ES LA CLAVE)
+        val embed69 = Regex("""https://embed69\.org/f/tt\d+""")
+            .find(html)
+            ?.value
 
-            val iframe =
-                doc.selectFirst("iframe")?.attr("src")
-                    ?: return false
+        if (embed69 != null) {
 
-            loadExtractor(
-                fixHostsLinks(iframe),
+            Embed69Extractor.load(
+                embed69,
                 data,
                 subtitleCallback,
                 callback
             )
 
-        } catch (_: Exception) {}
+            return true
+        }
+
+        // 🔥 2. fallback iframe (por si cambia el sitio)
+        val doc = Jsoup.parse(html)
+
+        val iframe = doc.selectFirst("#iframePlayer")?.attr("src")
+            ?: doc.selectFirst("iframe")?.attr("src")
+            ?: return false
+
+        val fixed = if (iframe.startsWith("//")) {
+            "https:$iframe"
+        } else if (iframe.startsWith("/")) {
+            "$mainUrl$iframe"
+        } else {
+            iframe
+        }
+
+        loadExtractor(
+            fixed,
+            data,
+            subtitleCallback,
+            callback
+        )
 
         return true
     }
 
     // =========================
-    // HOST FIX
+    // 🔥 MINOCHINOS REAL
     // =========================
+    private suspend fun extractMinochinos(
+        url: String,
+        referer: String,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val res = app.get(url, headers = mapOf("User-Agent" to "Mozilla/5.0"))
+            val html = res.text
 
+            Regex("""https?:\/\/[^\s"']+master\.txt""")
+                .find(html)
+                ?.value?.let { master ->
+
+                    callback(
+                        newExtractorLink(
+                            "Minochinos",
+                            "Minochinos",
+                            master
+                        ) {
+                            this.type = ExtractorLinkType.M3U8
+                            this.referer = "https://minochinos.com/"
+                            this.quality = 720
+                        }
+                    )
+                }
+
+        } catch (_: Exception) {
+        }
+    }
+
+    // =========================
+    // FIX HOSTS
+    // =========================
     private fun fixHostsLinks(url: String): String {
-
         return url
-            .replaceFirst("https://hglink.to", "https://streamwish.to")
-            .replaceFirst("https://swdyu.com", "https://streamwish.to")
-            .replaceFirst("https://filemoon.link", "https://filemoon.sx")
-            .replaceFirst("https://do7go.com", "https://dood.la")
-            .replaceFirst("https://doodstream.com", "https://dood.la")
-            .replaceFirst("https://streamtape.com", "https://streamtape.cc")
+            .replace("hglink.to", "streamwish.to")
+            .replace("filemoon.link", "filemoon.sx")
+            .replace("do7go.com", "dood.la")
     }
 }
