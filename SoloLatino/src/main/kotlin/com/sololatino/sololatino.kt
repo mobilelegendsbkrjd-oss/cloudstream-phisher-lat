@@ -16,8 +16,6 @@ class SoloLatino : MainAPI() {
         TvType.TvSeries
     )
 
-    private var lastServer: String? = null
-
     // =========================
     // MAIN PAGE
     // =========================
@@ -136,7 +134,7 @@ class SoloLatino : MainAPI() {
     }
 
     // =========================
-    // LINKS (FIX FINAL REAL)
+    // LINKS (FULL FIX)
     // =========================
     override suspend fun loadLinks(
         data: String,
@@ -148,11 +146,11 @@ class SoloLatino : MainAPI() {
         val doc = app.get(data).document
         val servers = mutableListOf<String>()
 
-        // normales
+        // 1. botones normales
         servers += doc.select("[data-server-btn]")
             .mapNotNull { it.attr("data-server-url") }
 
-        // anime onclick
+        // 2. onclick anime
         servers += doc.select("li[onclick]")
             .mapNotNull {
                 Regex("""go_to_player\('([^']+)""")
@@ -160,19 +158,35 @@ class SoloLatino : MainAPI() {
                     ?.groupValues?.getOrNull(1)
             }
 
-        if (servers.isEmpty()) return false
+        // 3. data-url / data-play
+        servers += doc.select("[data-url], [data-play], [data-href]")
+            .mapNotNull {
+                it.attr("data-url")
+                    .ifEmpty { it.attr("data-play") }
+                    .ifEmpty { it.attr("data-href") }
+            }
 
-        servers.distinct().forEach { originalUrl ->
+        // 4. iframes
+        servers += doc.select("iframe")
+            .mapNotNull { it.attr("src") }
 
-            val fixedUrl = fixHostsLinks(originalUrl.trim())
+        val clean = servers
+            .map { it.trim() }
+            .filter { it.startsWith("http") }
+            .distinct()
 
-            val cb: (ExtractorLink) -> Unit = { link ->
-                lastServer = fixedUrl
-                callback.invoke(link)
+        if (clean.isEmpty()) return false
+
+        clean.forEach { originalUrl ->
+
+            val fixed = fixHostsLinks(originalUrl)
+
+            val cb: (ExtractorLink) -> Unit = {
+                callback.invoke(it)
             }
 
             // =========================
-            // 🔥 TOKYO MX BASE64 (FIX REAL)
+            // 🔥 BASE64 TOKYO MX
             // =========================
             if (originalUrl.contains("re.sololatino.net") || originalUrl.contains("player?")) {
 
@@ -197,23 +211,52 @@ class SoloLatino : MainAPI() {
 
                 } catch (_: Exception) {}
 
-                // fallback
-                loadExtractor(fixedUrl, originalUrl, subtitleCallback, cb)
+                loadExtractor(fixed, originalUrl, subtitleCallback, cb)
                 return@forEach
             }
 
             // =========================
-            // RESTO (SIN ROMPER NADA)
+            // 🔥 UNPACK SERVERS
             // =========================
-            else when {
+            if (
+                fixed.contains("filemoon") ||
+                fixed.contains("vidhide") ||
+                fixed.contains("streamwish") ||
+                fixed.contains("voe")
+            ) {
 
-                fixedUrl.contains("embed69") -> {
-                    Embed69Extractor.load(fixedUrl, originalUrl, subtitleCallback, cb)
-                }
+                try {
+                    val html = app.get(fixed, headers = mapOf("Referer" to originalUrl)).text
 
-                else -> {
-                    loadExtractor(fixedUrl, originalUrl, subtitleCallback, cb)
-                }
+                    val packed = Regex(
+                        """eval\(function\(p,a,c,k,e,d.*?\)\)""",
+                        RegexOption.DOT_MATCHES_ALL
+                    ).find(html)?.value
+
+                    if (packed != null) {
+                        val unpacked = JsUnpacker(packed).unpack() ?: ""
+
+                        Regex("""https?:\/\/[^\s"']+\.m3u8""")
+                            .find(unpacked)?.value?.let { m3u8 ->
+                                callback.invoke(
+                                    newExtractorLink("Unpacked", "HLS", m3u8) {
+                                        type = ExtractorLinkType.M3U8
+                                        referer = fixed
+                                    }
+                                )
+                            }
+                    }
+
+                } catch (_: Exception) {}
+            }
+
+            // =========================
+            // 🔥 EMBED69
+            // =========================
+            if (fixed.contains("embed69")) {
+                Embed69Extractor.load(fixed, originalUrl, subtitleCallback, cb)
+            } else {
+                loadExtractor(fixed, originalUrl, subtitleCallback, cb)
             }
         }
 
