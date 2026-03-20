@@ -148,11 +148,9 @@ class SoloLatino : MainAPI() {
         val doc = app.get(data).document
         val servers = mutableListOf<String>()
 
-        // NORMAL
         servers += doc.select("[data-server-btn]")
             .mapNotNull { it.attr("data-server-url") }
 
-        // ANIME onclick
         servers += doc.select("li[onclick]")
             .mapNotNull {
                 Regex("""go_to_player\('([^']+)""")
@@ -162,9 +160,21 @@ class SoloLatino : MainAPI() {
 
         if (servers.isEmpty()) return false
 
-        val sorted = servers.sortedBy {
-            if (lastServer != null && it.contains(lastServer!!)) 0 else 1
-        }
+        val preferidos = listOf(
+            "dood", "voe", "streamwish", "vidhide",
+            "filemoon", "embed69", "watchsb"
+        )
+
+        val sorted = servers.sortedWith(compareBy<String> { url ->
+            val lower = url.lowercase()
+            when {
+                lastServer != null && lower.contains(lastServer!!) -> 0
+                preferidos.any { lower.contains(it) } -> 1
+                lower.contains("mp4upload") -> 10
+                lower.contains("ok.ru") -> 15
+                else -> 5
+            }
+        })
 
         sorted.forEach { originalUrl ->
 
@@ -183,7 +193,6 @@ class SoloLatino : MainAPI() {
                 try {
                     val html = app.get(originalUrl).text
 
-                    // MP4
                     Regex("""https?:\/\/[^\s"']+\.mp4""")
                         .find(html)?.value?.let {
                             callback.invoke(
@@ -194,14 +203,12 @@ class SoloLatino : MainAPI() {
                             return@forEach
                         }
 
-                    // iframe
                     Regex("""<iframe[^>]+src="([^"]+)"""")
                         .find(html)?.groupValues?.getOrNull(1)?.let {
                             loadExtractor(it, originalUrl, subtitleCallback, callback)
                             return@forEach
                         }
 
-                    // JS unpack
                     val packed = Regex(
                         """eval\(function\(p,a,c,k,e,d.*?\)\)""",
                         RegexOption.DOT_MATCHES_ALL
@@ -224,7 +231,60 @@ class SoloLatino : MainAPI() {
                 } catch (_: Exception) {}
             }
 
-            when {
+            // =========================
+            // OK.RU + MP4UPLOAD FIX
+            // =========================
+            else if (fixedUrl.contains("ok.ru") || fixedUrl.contains("mp4upload")) {
+
+                try {
+                    var extracted = false
+
+                    loadExtractor(fixedUrl, data, subtitleCallback) { link ->
+                        extracted = true
+                        callback.invoke(link)
+                    }
+
+                    if (!extracted) {
+
+                        val html = app.get(fixedUrl).text
+
+                        Regex("""https?://[^"'\s<>()]+?\.(mp4|m3u8)""")
+                            .findAll(html)
+                            .forEach {
+                                val link = it.value
+
+                                callback.invoke(
+                                    newExtractorLink(
+                                        "Direct Fix",
+                                        if (link.contains("m3u8")) "HLS" else "MP4",
+                                        link
+                                    ) {
+                                        this.type = if (link.contains("m3u8"))
+                                            ExtractorLinkType.M3U8
+                                        else ExtractorLinkType.VIDEO
+
+                                        this.referer = "https://ok.ru/"
+                                    }
+                                )
+                            }
+
+                        Regex("""og:video["'][^>]+content=["']([^"']+)""")
+                            .find(html)
+                            ?.groupValues?.getOrNull(1)
+                            ?.let {
+                                callback.invoke(
+                                    newExtractorLink("OK.ru OG", "MP4", it) {
+                                        this.type = ExtractorLinkType.VIDEO
+                                        this.referer = "https://ok.ru/"
+                                    }
+                                )
+                            }
+                    }
+
+                } catch (_: Exception) {}
+            }
+
+            else when {
 
                 fixedUrl.contains("embed69") -> {
                     Embed69Extractor.load(fixedUrl, data, subtitleCallback, cb)
@@ -248,7 +308,7 @@ class SoloLatino : MainAPI() {
     }
 
     // =========================
-    // MIRRORS FIX
+    // MIRRORS
     // =========================
     private fun fixHostsLinks(url: String): String {
         return url
