@@ -21,22 +21,22 @@ class SoloLatino : MainAPI() {
     // =========================
     // MAIN PAGE
     // =========================
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
 
         val doc = app.get(mainUrl).document
 
-        val lists = doc.select("section").mapNotNull { section ->
+        val lists = mutableListOf<HomePageList>()
+        val tokyo = mutableListOf<HomePageList>()
 
-            val title = section.selectFirst("h2")?.text() ?: return@mapNotNull null
+        doc.select("section").forEach { section ->
+
+            val title = section.selectFirst("h2")?.text() ?: return@forEach
 
             if (
                 title.contains("Últimos", true) ||
                 title.contains("Recientes", true) ||
                 title.contains("Añadidos", true)
-            ) return@mapNotNull null
+            ) return@forEach
 
             val items = section.select(".card").mapNotNull { card ->
 
@@ -46,7 +46,13 @@ class SoloLatino : MainAPI() {
                 val name = card.selectFirst(".card__title")?.text()
                     ?: return@mapNotNull null
 
-                val poster = card.selectFirst("img")?.attr("src")
+                val poster = card.selectFirst("img")?.let {
+                    it.attr("data-src").ifBlank {
+                        it.attr("data-lazy-src").ifBlank {
+                            it.attr("src")
+                        }
+                    }
+                }
 
                 val type = if (link.contains("/serie/"))
                     TvType.TvSeries else TvType.Movie
@@ -56,8 +62,18 @@ class SoloLatino : MainAPI() {
                 }
             }
 
-            if (items.isEmpty()) null else HomePageList(title, items)
+            if (items.isEmpty()) return@forEach
+
+            val list = HomePageList(title, items)
+
+            if (title.lowercase().contains("tokio")) {
+                tokyo.add(list)
+            } else {
+                lists.add(list)
+            }
         }
+
+        lists.addAll(tokyo)
 
         return newHomePageResponse(lists)
     }
@@ -120,7 +136,7 @@ class SoloLatino : MainAPI() {
     }
 
     // =========================
-    // LINKS (FIX TOTAL)
+    // LINKS (ULTRA FIX)
     // =========================
     override suspend fun loadLinks(
         data: String,
@@ -130,14 +146,13 @@ class SoloLatino : MainAPI() {
     ): Boolean {
 
         val doc = app.get(data).document
-
         val servers = mutableListOf<String>()
 
-        // 🔥 NORMAL
+        // NORMAL
         servers += doc.select("[data-server-btn]")
             .mapNotNull { it.attr("data-server-url") }
 
-        // 🔥 ANIME onclick
+        // ANIME onclick
         servers += doc.select("li[onclick]")
             .mapNotNull {
                 Regex("""go_to_player\('([^']+)""")
@@ -151,77 +166,94 @@ class SoloLatino : MainAPI() {
             if (lastServer != null && it.contains(lastServer!!)) 0 else 1
         }
 
-        var isFirst = true
-
         sorted.forEach { url ->
 
-            val fixedUrl = when {
-
-                // 🔥 BASE64 decode
-                url.contains("re.sololatino.net") -> {
-                    Regex("""link=([^&]+)""")
-                        .find(url)
-                        ?.groupValues?.getOrNull(1)
-                        ?.let {
-                            try {
-                                String(Base64.decode(it, Base64.DEFAULT))
-                            } catch (_: Exception) { null }
-                        } ?: url
-                }
-
-                else -> url
-            }
-
-            val serverName = fixedUrl.substringAfter("//").substringBefore("/")
+            val fixedUrl = if (url.contains("re.sololatino.net")) {
+                Regex("""link=([^&]+)""")
+                    .find(url)
+                    ?.groupValues?.getOrNull(1)
+                    ?.let {
+                        try {
+                            String(Base64.decode(it, Base64.DEFAULT))
+                        } catch (_: Exception) { null }
+                    } ?: url
+            } else url
 
             val cb: (ExtractorLink) -> Unit = { link ->
-
-                lastServer = serverName
-
-                if (isFirst) {
-                    isFirst = false
-                    callback.invoke(link)
-                }
-
+                lastServer = fixedUrl
                 callback.invoke(link)
             }
 
-            when {
+            // =========================
+            // 🔥 RE.SOLOLATINO FULL FIX
+            // =========================
+            if (url.contains("re.sololatino.net")) {
 
-                // EMBED69
-                fixedUrl.contains("embed69") -> {
-                    Embed69Extractor.load(fixedUrl, data, subtitleCallback, cb)
-                }
+                try {
+                    val html = app.get(url).text
 
-                // MP4 DIRECTO
-                fixedUrl.endsWith(".mp4") -> {
-                    callback.invoke(
-                        newExtractorLink(
-                            "Direct",
-                            "MP4 Directo",
-                            fixedUrl
-                        ) {
-                            this.type = ExtractorLinkType.VIDEO
-                            this.quality = Qualities.Unknown.value
+                    // MP4
+                    Regex("""https?:\/\/[^\s"']+\.mp4""")
+                        .find(html)
+                        ?.value?.let { mp4 ->
+                            callback.invoke(
+                                newExtractorLink("TokyoMX", "MP4", mp4) {
+                                    this.type = ExtractorLinkType.VIDEO
+                                }
+                            )
+                            return@forEach
                         }
-                    )
-                }
 
-                // SHORT LINKS
-                fixedUrl.contains("short") -> {
-                    try {
-                        val real = app.get(fixedUrl).url
-                        loadExtractor(real, data, subtitleCallback, cb)
-                    } catch (_: Exception) {}
-                }
+                    // iframe
+                    Regex("""<iframe[^>]+src="([^"]+)"""")
+                        .find(html)
+                        ?.groupValues?.getOrNull(1)
+                        ?.let {
+                            loadExtractor(it, url, subtitleCallback, callback)
+                            return@forEach
+                        }
 
-                // DEFAULT
-                else -> {
-                    loadExtractor(fixedUrl, data, subtitleCallback, cb)
-                }
+                    // JS unpack
+                    val packed = Regex(
+                        """eval\(function\(p,a,c,k,e,d.*?\)\)""",
+                        RegexOption.DOT_MATCHES_ALL
+                    ).find(html)?.value
+
+                    if (packed != null) {
+
+                        val unpacked = JsUnpacker(packed).unpack()
+
+                        Regex("""https?:\/\/[^\s"']+\.m3u8""")
+                            .find(unpacked ?: "")
+                            ?.value?.let { m3u8 ->
+                                callback.invoke(
+                                    newExtractorLink("TokyoMX", "HLS", m3u8) {
+                                        this.type = ExtractorLinkType.M3U8
+                                    }
+                                )
+                                return@forEach
+                            }
+                    }
+
+                } catch (_: Exception) {}
+            }
+
+            // EMBED69
+            if (fixedUrl.contains("embed69")) {
+                Embed69Extractor.load(fixedUrl, data, subtitleCallback, cb)
+            } else if (fixedUrl.endsWith(".mp4")) {
+
+                callback.invoke(
+                    newExtractorLink("Direct", "MP4", fixedUrl) {
+                        this.type = ExtractorLinkType.VIDEO
+                    }
+                )
+
+            } else {
+                loadExtractor(fixedUrl, data, subtitleCallback, cb)
             }
         }
 
         return true
     }
-}
+                          }
