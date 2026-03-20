@@ -136,7 +136,7 @@ class SoloLatino : MainAPI() {
     }
 
     // =========================
-    // LINKS (ULTRA FIX)
+    // LINKS
     // =========================
     override suspend fun loadLinks(
         data: String,
@@ -166,18 +166,9 @@ class SoloLatino : MainAPI() {
             if (lastServer != null && it.contains(lastServer!!)) 0 else 1
         }
 
-        sorted.forEach { url ->
+        sorted.forEach { originalUrl ->
 
-            val fixedUrl = if (url.contains("re.sololatino.net")) {
-                Regex("""link=([^&]+)""")
-                    .find(url)
-                    ?.groupValues?.getOrNull(1)
-                    ?.let {
-                        try {
-                            String(Base64.decode(it, Base64.DEFAULT))
-                        } catch (_: Exception) { null }
-                    } ?: url
-            } else url
+            val fixedUrl = fixHostsLinks(originalUrl.trim())
 
             val cb: (ExtractorLink) -> Unit = { link ->
                 lastServer = fixedUrl
@@ -185,19 +176,18 @@ class SoloLatino : MainAPI() {
             }
 
             // =========================
-            // 🔥 RE.SOLOLATINO FULL FIX
+            // RE.SOLOLATINO
             // =========================
-            if (url.contains("re.sololatino.net")) {
+            if (originalUrl.contains("re.sololatino.net")) {
 
                 try {
-                    val html = app.get(url).text
+                    val html = app.get(originalUrl).text
 
                     // MP4
                     Regex("""https?:\/\/[^\s"']+\.mp4""")
-                        .find(html)
-                        ?.value?.let { mp4 ->
+                        .find(html)?.value?.let {
                             callback.invoke(
-                                newExtractorLink("TokyoMX", "MP4", mp4) {
+                                newExtractorLink("TokyoMX", "MP4", it) {
                                     this.type = ExtractorLinkType.VIDEO
                                 }
                             )
@@ -206,10 +196,8 @@ class SoloLatino : MainAPI() {
 
                     // iframe
                     Regex("""<iframe[^>]+src="([^"]+)"""")
-                        .find(html)
-                        ?.groupValues?.getOrNull(1)
-                        ?.let {
-                            loadExtractor(it, url, subtitleCallback, callback)
+                        .find(html)?.groupValues?.getOrNull(1)?.let {
+                            loadExtractor(it, originalUrl, subtitleCallback, callback)
                             return@forEach
                         }
 
@@ -220,14 +208,12 @@ class SoloLatino : MainAPI() {
                     ).find(html)?.value
 
                     if (packed != null) {
-
                         val unpacked = JsUnpacker(packed).unpack()
 
                         Regex("""https?:\/\/[^\s"']+\.m3u8""")
-                            .find(unpacked ?: "")
-                            ?.value?.let { m3u8 ->
+                            .find(unpacked ?: "")?.value?.let {
                                 callback.invoke(
-                                    newExtractorLink("TokyoMX", "HLS", m3u8) {
+                                    newExtractorLink("TokyoMX", "HLS", it) {
                                         this.type = ExtractorLinkType.M3U8
                                     }
                                 )
@@ -238,22 +224,62 @@ class SoloLatino : MainAPI() {
                 } catch (_: Exception) {}
             }
 
-            // EMBED69
-            if (fixedUrl.contains("embed69")) {
-                Embed69Extractor.load(fixedUrl, data, subtitleCallback, cb)
-            } else if (fixedUrl.endsWith(".mp4")) {
+            when {
 
-                callback.invoke(
-                    newExtractorLink("Direct", "MP4", fixedUrl) {
-                        this.type = ExtractorLinkType.VIDEO
-                    }
-                )
+                fixedUrl.contains("embed69") -> {
+                    Embed69Extractor.load(fixedUrl, data, subtitleCallback, cb)
+                }
 
-            } else {
-                loadExtractor(fixedUrl, data, subtitleCallback, cb)
+                fixedUrl.endsWith(".mp4") -> {
+                    callback.invoke(
+                        newExtractorLink("Direct", "MP4", fixedUrl) {
+                            this.type = ExtractorLinkType.VIDEO
+                        }
+                    )
+                }
+
+                else -> {
+                    loadExtractor(fixedUrl, data, subtitleCallback, cb)
+                }
             }
         }
 
         return true
+    }
+
+    // =========================
+    // MIRRORS FIX
+    // =========================
+    private fun fixHostsLinks(url: String): String {
+        return url
+            .replace("hglink.to", "streamwish.to")
+            .replace("swdyu.com", "streamwish.to")
+            .replace("cybervynx.com", "streamwish.to")
+            .replace("dumbalag.com", "streamwish.to")
+            .replace("wishembed.com", "streamwish.to")
+            .replace("stwishe.com", "streamwish.to")
+
+            .replace("mivalyo.com", "vidhidepro.com")
+            .replace("dinisglows.com", "vidhidepro.com")
+            .replace("dhtpre.com", "vidhidepro.com")
+            .replace("vidhide.com", "vidhidepro.com")
+            .replace("voidboost.net", "vidhidepro.com")
+
+            .replace("filemoon.link", "filemoon.sx")
+            .replace("filemoon.lat", "filemoon.sx")
+
+            .replace("ok.ru/videoembed/", "ok.ru/video/")
+
+            .replace("do7go.com", "dood.la")
+            .replace("doodstream.com", "dood.la")
+
+            .replace("sblona.com", "watchsb.com")
+            .replace("sbfull.com", "watchsb.com")
+
+            .replace("lulu.st", "lulustream.com")
+
+            .replace("uqload.io", "uqload.com")
+
+            .replace("voe.sx", "voe.unblockit.cat")
     }
                           }
