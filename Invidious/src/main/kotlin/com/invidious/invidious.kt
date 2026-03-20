@@ -1,121 +1,207 @@
 package com.invidious
 
-import android.content.Context
-import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.Actor
+import com.lagradost.cloudstream3.ActorData
+import com.lagradost.cloudstream3.HomePageList
+import com.lagradost.cloudstream3.HomePageResponse
+import com.lagradost.cloudstream3.LoadResponse
+import com.lagradost.cloudstream3.MainAPI
+import com.lagradost.cloudstream3.MainPageRequest
+import com.lagradost.cloudstream3.SearchResponse
+import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.TvType
+import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.newHomePageResponse
+import com.lagradost.cloudstream3.newMovieLoadResponse
+import com.lagradost.cloudstream3.newMovieSearchResponse
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.AcraApplication
-import java.net.URLEncoder
-import java.util.concurrent.atomic.AtomicInteger
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.StringUtils.encodeUri
+import com.lagradost.cloudstream3.utils.loadExtractor
 
-class InvidiousProvider : MainAPI() {
+@Suppress("DEPRECATION")
+class YouTube : MainAPI() {
 
-    override var mainUrl = "https://inv.nadeko.net"
-    override var name = "Invidious"
-    override var lang = "en"
+    override var mainUrl = "https://yewtu.be"
+    override var name = "YouTube"
     override val hasMainPage = true
-    override val supportedTypes = setOf(TvType.Movie)
+    override var lang = "MX"
+    override val supportedTypes = setOf(TvType.Others)
 
-    private val instances = listOf(
-        "https://inv.nadeko.net",
-        "https://inv.vern.cc",
-        "https://invidious.jing.rocks"
-    )
+    // ================= HOME =================
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
 
-    private val index = AtomicInteger(0)
-
-    private suspend fun getWorkingInstance(): String {
-        repeat(instances.size) {
-            val i = index.getAndIncrement() % instances.size
-            val base = instances[i]
-            try {
-                val res = app.get("$base/api/v1/trending?fields=videoId", timeout = 5)
-                if (res.isSuccessful) {
-                    mainUrl = base
-                    return base
-                }
-            } catch (_: Exception) {}
+        suspend fun searchSection(query: String): List<SearchEntry> {
+            return tryParseJson(
+                app.get(
+                    "$mainUrl/api/v1/search?q=${query.encodeUri()}&type=video&page=1",
+                    headers = mapOf(
+                        "User-Agent" to "Mozilla/5.0",
+                        "Accept" to "application/json"
+                    )
+                ).text
+            ) ?: emptyList()
         }
-        return instances.first()
+
+        val test = searchSection("mrbeast")
+
+        return newHomePageResponse(
+            listOf(
+                HomePageList("🔥 YouTube", test.mapNotNull { it.toSearchResponse(this) })
+            ),
+            false
+        )
     }
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        val base = getWorkingInstance()
-
-        val trendingJson = app.get("$base/api/v1/trending?fields=videoId,title").text
-
-        val regex = """"videoId":"(.*?)".*?"title":"(.*?)"""".toRegex()
-
-        val results = regex.findAll(trendingJson).map {
-            val id = it.groupValues[1]
-            val title = it.groupValues[2]
-            newMovieSearchResponse(title, "$base/watch?v=$id", TvType.Movie)
-        }.toList()
-
-        return newHomePageResponse(listOf(HomePageList("Trending", results)))
-    }
-
+    // ================= SEARCH =================
     override suspend fun search(query: String): List<SearchResponse> {
-        val base = getWorkingInstance()
-        val encoded = URLEncoder.encode(query, "UTF-8")
-
-        val json = app.get("$base/api/v1/search?q=$encoded&type=video").text
-
-        val regex = """"videoId":"(.*?)".*?"title":"(.*?)"""".toRegex()
-
-        return regex.findAll(json).map {
-            val id = it.groupValues[1]
-            val title = it.groupValues[2]
-            newMovieSearchResponse(title, "$base/watch?v=$id", TvType.Movie)
-        }.toList()
+        val res = tryParseJson<List<SearchEntry>>(
+            app.get(
+                "$mainUrl/api/v1/search?q=${query.encodeUri()}&type=video&page=1",
+                headers = mapOf(
+                    "User-Agent" to "Mozilla/5.0",
+                    "Accept" to "application/json"
+                )
+            ).text
+        )
+        return res?.mapNotNull { it.toSearchResponse(this) } ?: emptyList()
     }
 
+    // ================= LOAD =================
     override suspend fun load(url: String): LoadResponse? {
-        val base = getWorkingInstance()
 
         val videoId = Regex("watch\\?v=([a-zA-Z0-9_-]+)")
-            .find(url)?.groups?.get(1)?.value ?: return null
+            .find(url)?.groupValues?.get(1) ?: return null
 
-        val json = app.get("$base/api/v1/videos/$videoId").text
+        val res = tryParseJson<VideoEntry>(
+            app.get(
+                "$mainUrl/api/v1/videos/$videoId",
+                headers = mapOf("User-Agent" to "Mozilla/5.0")
+            ).text
+        ) ?: return null
 
-        val title = """"title":"(.*?)"""".toRegex().find(json)?.groupValues?.get(1) ?: return null
-        val description = """"description":"(.*?)"""".toRegex().find(json)?.groupValues?.get(1)
+        return res.toLoadResponse(this)
+    }
 
-        return newMovieLoadResponse(title, url, TvType.Movie, videoId) {
-            plot = description
-            posterUrl = "$base/vi/$videoId/hqdefault.jpg"
+    // ================= DATA =================
+
+    private data class SearchEntry(
+        val title: String? = null,
+        val videoId: String? = null
+    ) {
+        fun toSearchResponse(provider: YouTube): SearchResponse? {
+            val id = videoId ?: return null
+            val t = title ?: "Sin título"
+
+            return provider.newMovieSearchResponse(
+                t,
+                "${provider.mainUrl}/watch?v=$id",
+                TvType.Others
+            ) {
+                posterUrl = "https://i.ytimg.com/vi/$id/hqdefault.jpg"
+            }
         }
     }
 
+    private data class Thumbnail(
+        val url: String
+    )
+
+    private data class FormatStream(
+        val url: String,
+        val qualityLabel: String? = null
+    )
+
+    private data class VideoEntry(
+        val title: String?,
+        val description: String?,
+        val videoId: String,
+        val recommendedVideos: List<SearchEntry>? = emptyList(),
+        val author: String?,
+        val authorThumbnails: List<Thumbnail>? = emptyList(),
+        val formatStreams: List<FormatStream>? = emptyList()
+    ) {
+        suspend fun toLoadResponse(provider: YouTube): LoadResponse {
+            return provider.newMovieLoadResponse(
+                title ?: "YouTube",
+                "${provider.mainUrl}/watch?v=$videoId",
+                TvType.Others,
+                videoId
+            ) {
+                plot = description ?: ""
+                posterUrl = "https://i.ytimg.com/vi/$videoId/hqdefault.jpg"
+
+                recommendations = recommendedVideos
+                    ?.mapNotNull { it.toSearchResponse(provider) } ?: emptyList()
+
+                actors = listOf(
+                    ActorData(
+                        Actor(
+                            author ?: "YouTube",
+                            authorThumbnails?.lastOrNull()?.url ?: ""
+                        ),
+                        roleString = "Canal"
+                    )
+                )
+            }
+        }
+    }
+
+    // ================= LINKS =================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
+        callback: (com.lagradost.cloudstream3.utils.ExtractorLink) -> Unit
     ): Boolean {
 
-        val base = getWorkingInstance()
-        val json = app.get("$base/api/v1/videos/$data").text
+        val res = tryParseJson<VideoEntry>(
+            app.get(
+                "$mainUrl/api/v1/videos/$data",
+                headers = mapOf("User-Agent" to "Mozilla/5.0")
+            ).text
+        )
 
-        val streamRegex = """"url":"(.*?)".*?"qualityLabel":"(.*?)"""".toRegex()
+        // 🔥 Direct streams
+        res?.formatStreams?.forEach { stream ->
 
-        streamRegex.findAll(json).forEach {
-            val url = it.groupValues[1].replace("\\u0026", "&")
-            val qualityLabel = it.groupValues[2]
-            val q = qualityLabel.replace("p", "").toIntOrNull() ?: Qualities.Unknown.value
+            val quality = when {
+                stream.qualityLabel?.contains("1080") == true -> 1080
+                stream.qualityLabel?.contains("720") == true -> 720
+                stream.qualityLabel?.contains("480") == true -> 480
+                else -> 0
+            }
 
             callback(
                 newExtractorLink(
-                    name,
-                    qualityLabel,
-                    url
+                    source = "Invidious",
+                    name = "Direct ${stream.qualityLabel ?: "Auto"}",
+                    url = stream.url,
+                    type = ExtractorLinkType.VIDEO
                 ) {
-                    quality = q
-                    this.referer = base
+                    this.quality = quality
                 }
             )
         }
+
+        // 🔥 DASH
+        callback(
+            newExtractorLink(
+                source = "Invidious",
+                name = "DASH",
+                url = "$mainUrl/api/manifest/dash/id/$data",
+                type = ExtractorLinkType.DASH
+            )
+        )
+
+        // 🔥 fallback
+        loadExtractor(
+            "https://youtube.com/watch?v=$data",
+            subtitleCallback,
+            callback
+        )
 
         return true
     }

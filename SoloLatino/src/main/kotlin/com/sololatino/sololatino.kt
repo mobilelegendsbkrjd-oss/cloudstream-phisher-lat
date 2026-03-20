@@ -1,56 +1,49 @@
 package com.sololatino
 
+import android.util.Base64
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.*
-import org.jsoup.Jsoup
-import org.jsoup.nodes.Element
 
 class SoloLatino : MainAPI() {
 
     override var mainUrl = "https://sololatino.net"
     override var name = "SoloLatino"
-    override var lang = "mx"
-
     override val hasMainPage = true
-    override val hasChromecastSupport = true
-    override val hasDownloadSupport = true
+    override var lang = "es"
 
     override val supportedTypes = setOf(
         TvType.Movie,
-        TvType.TvSeries,
-        TvType.Anime,
-        TvType.Cartoon,
+        TvType.TvSeries
     )
 
-    // =========================
-    // SAFE GET
-    // =========================
-    private suspend fun safeGet(url: String, referer: String = mainUrl): String? {
-        return try {
-            app.get(
-                url,
-                timeout = 30,
-                headers = mapOf(
-                    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-                    "Accept" to "*/*",
-                    "Referer" to referer,
-                    "Origin" to mainUrl,
-                    "Connection" to "keep-alive"
-                )
-            ).text
-        } catch (_: Exception) {
-            null
-        }
-    }
+    private var lastServer: String? = null
+    private var nextEpisodeUrl: String? = null
 
     // =========================
-    // IMAGE
+    // 🎨 UI DECORATOR
     // =========================
-    private fun getImage(el: Element?): String? {
-        return el?.attr("src")
-            ?: el?.attr("data-src")
-            ?: el?.attr("data-lazy-src")
+    private fun decorateTitle(title: String): String {
+        val t = title.lowercase()
+
+        return when {
+            t.contains("netflix") -> "🟥 ɴᴇᴛꜰʟɪx"
+            t.contains("amazon") -> "🟦 ᴀᴍᴀᴢᴏɴ ᴘʀɪᴍᴇ"
+            t.contains("disney") -> "🟦 ᴅɪsɴᴇʏ ➕"
+            t.contains("hbo") -> "🟪 ʜʙᴏ ᴍᴀx"
+            t.contains("apple") -> "🍎 ᴀᴘᴘʟᴇ ᴛᴠ"
+            t.contains("hulu") -> "🟩 ʜᴜʟᴜ"
+            t.contains("paramount") -> "🏔️ ᴘᴀʀᴀᴍᴏᴜɴᴛ"
+
+            t.contains("tokyo mx") -> "🌸 ᴛᴏᴋʏᴏ ᴍx 🔞"
+            t.contains("tv tokio") -> "📺 ᴛᴠ ᴛᴏᴋɪᴏ"
+
+            t.contains("pelicula") -> "🎬 ᴘᴇʟɪᴄᴜʟᴀs"
+            t.contains("serie") -> "📺 sᴇʀɪᴇs"
+            t.contains("anime") -> "🌸 ᴀɴɪᴍᴇ"
+
+            else -> "🎬 $title"
+        }
     }
 
     // =========================
@@ -61,118 +54,145 @@ class SoloLatino : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
 
-        val sections = listOf(
-            "Películas" to "$mainUrl/peliculas",
-            "Series" to "$mainUrl/series",
-            "Animes" to "$mainUrl/animes"
-        )
+        val doc = app.get(mainUrl).document
 
-        val lists = mutableListOf<HomePageList>()
+        val normal = mutableListOf<HomePageList>()
+        val tokyo = mutableListOf<HomePageList>()
 
-        for ((name, url) in sections) {
+        doc.select("section").forEach { section ->
 
-            val html = safeGet(url) ?: continue
-            val doc = Jsoup.parse(html)
+            val rawTitle = section.selectFirst("h2")?.text() ?: return@forEach
 
-            val cards = doc.select("div.card, article.item")
+            if (
+                rawTitle.contains("Últimos", true) ||
+                rawTitle.contains("Recientes", true) ||
+                rawTitle.contains("Añadidos", true)
+            ) return@forEach
 
-            val items = cards.mapNotNull { card ->
+            val items = section.select(".card").mapNotNull { card ->
 
                 val a = card.selectFirst("a") ?: return@mapNotNull null
-                val link = a.attr("href").let {
-                    if (it.startsWith("/")) "$mainUrl$it" else it
+                val link = fixUrl(a.attr("href"))
+
+                val name = card.selectFirst(".card__title")?.text()
+                    ?: return@mapNotNull null
+
+                val poster = card.selectFirst("img")?.let {
+                    it.attr("data-src").ifBlank {
+                        it.attr("data-lazy-src").ifBlank {
+                            it.attr("src")
+                        }
+                    }
                 }
 
-                val title = card.text()
-                val poster = getImage(card.selectFirst("img"))
+                val type = if (link.contains("/serie/"))
+                    TvType.TvSeries else TvType.Movie
 
-                newTvSeriesSearchResponse(title, link, TvType.TvSeries) {
-                    posterUrl = poster
-                }
-            }
-
-            if (items.isNotEmpty())
-                lists.add(HomePageList(name, items))
-        }
-
-        return newHomePageResponse(lists)
-    }
-
-    // =========================
-    // SEARCH
-    // =========================
-    override suspend fun search(query: String): List<SearchResponse> {
-
-        return try {
-
-            val doc = app.get("$mainUrl/buscar?q=${query.replace(" ", "+")}").document
-
-            doc.select("div.card, article.item").mapNotNull {
-
-                val link = it.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-                val title = it.text()
-                val poster = getImage(it.selectFirst("img"))
-
-                newTvSeriesSearchResponse(title, link, TvType.TvSeries) {
-                    posterUrl = poster
+                newMovieSearchResponse(name, link, type) {
+                    this.posterUrl = poster
                 }
             }
 
-        } catch (_: Exception) {
-            emptyList()
+            if (items.isEmpty()) return@forEach
+
+            val list = HomePageList(decorateTitle(rawTitle), items)
+
+            if (rawTitle.lowercase().contains("tokyo mx")) {
+                tokyo.add(list)
+            } else {
+                normal.add(list)
+            }
         }
+
+        normal.addAll(tokyo)
+
+        return newHomePageResponse(normal)
     }
 
     // =========================
     // LOAD
     // =========================
-    override suspend fun load(url: String): LoadResponse? {
+    override suspend fun load(url: String): LoadResponse {
 
-        val html = safeGet(url, mainUrl) ?: return null
-        val doc = Jsoup.parse(html)
+        val doc = app.get(url).document
 
-        val title = doc.selectFirst("h1")?.text()?.trim() ?: return null
+        val rawTitle = doc.selectFirst("meta[property=og:title]")
+            ?.attr("content") ?: "Sin título"
 
-        val poster = Regex("""https://image\.tmdb\.org/t/p/[^"]+""")
-            .find(html)
-            ?.value
+        val title = rawTitle
+            .substringBefore("|")
+            .replace(Regex("""^Ver\s+""", RegexOption.IGNORE_CASE), "")
+            .replace("Latino", "", true)
+            .replace(Regex("""\(\d{4}\)"""), "")
+            .replace("Online", "", true)
+            .trim()
 
-        val description = doc.selectFirst("meta[name=description]")
-            ?.attr("content")
-            ?: ""
+        val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")
 
-        val isMovie = url.contains("/pelicula/")
+        val plot = doc.selectFirst("meta[name=description]")
+            ?.attr("content") ?: ""
 
-        return if (isMovie) {
-            newMovieLoadResponse(
-                title,
-                url, // 🔥 IMPORTANTE: NO embed69
-                TvType.Movie,
-                url
-            ) {
-                this.posterUrl = poster
-                this.plot = description
+        val isAdult = doc.select(".detail-field span")
+            .any {
+                val t = it.text().lowercase()
+                t.contains("adult") || t.contains("hentai") || t.contains("erotic")
             }
+
+        val tags = mutableListOf<String>()
+        if (isAdult) tags.add("🔞 Adultos")
+
+        val eps = doc.select("a.ep-item")
+
+        nextEpisodeUrl = eps
+            .dropWhile { fixUrl(it.attr("href")) != url }
+            .drop(1)
+            .firstOrNull()
+            ?.attr("href")
+            ?.let { fixUrl(it) }
+
+        val isSeries = url.contains("/serie/")
+
+        return if (!isSeries) {
+
+            newMovieLoadResponse(title, url, TvType.Movie, url) {
+                this.posterUrl = poster
+                this.plot = plot
+                this.tags = tags
+            }
+
         } else {
-            // 🔥 SERIES: usamos misma URL como episodio único
-            newTvSeriesLoadResponse(
-                title,
-                url,
-                TvType.TvSeries,
-                listOf(
-                    newEpisode(url) {
-                        this.name = "Ver"
+
+            val episodes = mutableListOf<Episode>()
+
+            eps.forEach { ep ->
+
+                val epUrl = fixUrl(ep.attr("href"))
+
+                val num = ep.selectFirst(".ep-num")
+                    ?.text()?.replace("E", "")?.toIntOrNull()
+
+                val name = ep.selectFirst("p.text-sm")?.text()
+                val thumb = ep.selectFirst("img")?.attr("src")
+
+                episodes.add(
+                    newEpisode(epUrl) {
+                        this.name = name
+                        this.episode = num
+                        this.posterUrl = thumb ?: poster
                     }
                 )
-            ) {
+            }
+
+            newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
-                this.plot = description
+                this.plot = plot
+                this.tags = tags
             }
         }
     }
 
     // =========================
-    // LOAD LINKS (REAL FIX)
+    // LINKS (FULL FIX)
     // =========================
     override suspend fun loadLinks(
         data: String,
@@ -181,90 +201,74 @@ class SoloLatino : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
 
-        val html = safeGet(data, mainUrl) ?: return false
+        val doc = app.get(data).document
 
-        // 🔥 1. buscar embed69 directo (ESTO ES LA CLAVE)
-        val embed69 = Regex("""https://embed69\.org/f/tt\d+""")
-            .find(html)
-            ?.value
+        val servers = mutableListOf<String>()
 
-        if (embed69 != null) {
+        // 🔥 NORMAL
+        servers += doc.select("[data-server-btn]")
+            .mapNotNull { it.attr("data-server-url") }
 
-            Embed69Extractor.load(
-                embed69,
-                data,
-                subtitleCallback,
-                callback
-            )
+        // 🔥 ANIME onclick
+        servers += doc.select("li[onclick]")
+            .mapNotNull {
+                Regex("""go_to_player\('([^']+)""")
+                    .find(it.attr("onclick"))
+                    ?.groupValues?.getOrNull(1)
+            }
 
-            return true
+        if (servers.isEmpty()) return false
+
+        val sorted = servers.sortedBy {
+            if (lastServer != null && it.contains(lastServer!!)) 0 else 1
         }
 
-        // 🔥 2. fallback iframe (por si cambia el sitio)
-        val doc = Jsoup.parse(html)
+        var isFirst = true
 
-        val iframe = doc.selectFirst("#iframePlayer")?.attr("src")
-            ?: doc.selectFirst("iframe")?.attr("src")
-            ?: return false
+        sorted.forEach { url ->
 
-        val fixed = if (iframe.startsWith("//")) {
-            "https:$iframe"
-        } else if (iframe.startsWith("/")) {
-            "$mainUrl$iframe"
-        } else {
-            iframe
-        }
+            val fixedUrl = when {
 
-        loadExtractor(
-            fixed,
-            data,
-            subtitleCallback,
-            callback
-        )
-
-        return true
-    }
-
-    // =========================
-    // 🔥 MINOCHINOS REAL
-    // =========================
-    private suspend fun extractMinochinos(
-        url: String,
-        referer: String,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        try {
-            val res = app.get(url, headers = mapOf("User-Agent" to "Mozilla/5.0"))
-            val html = res.text
-
-            Regex("""https?:\/\/[^\s"']+master\.txt""")
-                .find(html)
-                ?.value?.let { master ->
-
-                    callback(
-                        newExtractorLink(
-                            "Minochinos",
-                            "Minochinos",
-                            master
-                        ) {
-                            this.type = ExtractorLinkType.M3U8
-                            this.referer = "https://minochinos.com/"
-                            this.quality = 720
-                        }
-                    )
+                // 🔥 BASE64 decode
+                url.contains("re.sololatino.net") -> {
+                    Regex("""link=([^&]+)""")
+                        .find(url)
+                        ?.groupValues?.getOrNull(1)
+                        ?.let {
+                            try {
+                                String(Base64.decode(it, Base64.DEFAULT))
+                            } catch (_: Exception) { null }
+                        } ?: url
                 }
 
-        } catch (_: Exception) {
-        }
-    }
+                else -> url
+            }
 
-    // =========================
-    // FIX HOSTS
-    // =========================
-    private fun fixHostsLinks(url: String): String {
-        return url
-            .replace("hglink.to", "streamwish.to")
-            .replace("filemoon.link", "filemoon.sx")
-            .replace("do7go.com", "dood.la")
+            val serverName = fixedUrl.substringAfter("//").substringBefore("/")
+
+            val cb: (ExtractorLink) -> Unit = { link ->
+
+                lastServer = serverName
+
+                if (isFirst) {
+                    isFirst = false
+                    callback.invoke(link)
+                }
+
+                callback.invoke(link)
+            }
+
+            when {
+                fixedUrl.contains("embed69") -> {
+                    Embed69Extractor.load(fixedUrl, data, subtitleCallback, cb)
+                }
+
+                else -> {
+                    loadExtractor(fixedUrl, data, subtitleCallback, cb)
+                }
+            }
+        }
+
+        return true
     }
 }
