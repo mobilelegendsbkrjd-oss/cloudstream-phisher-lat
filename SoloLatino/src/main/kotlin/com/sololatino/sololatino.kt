@@ -73,7 +73,7 @@ class SoloLatino : MainAPI() {
             }
         }
 
-        normal.addAll(tokio)
+        normal.addAll(tokyo)
 
         return newHomePageResponse(normal)
     }
@@ -136,7 +136,7 @@ class SoloLatino : MainAPI() {
     }
 
     // =========================
-    // LINKS (FIX REAL)
+    // LINKS (FIXEADO: Base64 robusto + fallback fuerte)
     // =========================
     override suspend fun loadLinks(
         data: String,
@@ -148,11 +148,9 @@ class SoloLatino : MainAPI() {
         val doc = app.get(data).document
         val servers = mutableListOf<String>()
 
-        // normales
         servers += doc.select("[data-server-btn]")
             .mapNotNull { it.attr("data-server-url") }
 
-        // anime onclick
         servers += doc.select("li[onclick]")
             .mapNotNull {
                 Regex("""go_to_player\('([^']+)""")
@@ -172,29 +170,52 @@ class SoloLatino : MainAPI() {
             }
 
             // =========================
-            // 🔥 TOKYO MX BASE64
+            // FIX PARA re.sololatino.net / Tokyo MX (Base64 robusto)
             // =========================
-            if (originalUrl.contains("re.sololatino.net")) {
+            if (originalUrl.contains("re.sololatino.net") || originalUrl.contains("player?")) {
 
                 try {
-                    val decoded = Regex("""link=([^&]+)""")
-                        .find(originalUrl)
-                        ?.groupValues?.getOrNull(1)
-                        ?.let { String(Base64.decode(it, Base64.DEFAULT)) }
+                    var decodedUrl: String? = null
 
-                    if (!decoded.isNullOrEmpty()) {
-                        val finalUrl = fixHostsLinks(decoded)
-
-                        loadExtractor(finalUrl, originalUrl, subtitleCallback, callback)
-
-                        return@forEach
+                    // Intentos múltiples para extraer Base64
+                    listOf(
+                        """link=([^&]+)""",
+                        """\?link=([A-Za-z0-9+/=]+)""",
+                        """=([A-Za-z0-9+/=]{20,})""",
+                        """player\?([A-Za-z0-9+/=]+)"""
+                    ).forEach { regexStr ->
+                        if (decodedUrl.isNullOrEmpty()) {
+                            Regex(regexStr).find(originalUrl)?.groupValues?.getOrNull(1)?.let { candidate ->
+                                try {
+                                    val bytes = Base64.decode(
+                                        candidate.trim(),
+                                        Base64.DEFAULT or Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+                                    )
+                                    decodedUrl = String(bytes).trim()
+                                } catch (_: Exception) {}
+                            }
+                        }
                     }
 
+                    if (!decodedUrl.isNullOrEmpty()) {
+                        val finalUrl = fixHostsLinks(decodedUrl)
+
+                        if (finalUrl.contains("embed69")) {
+                            Embed69Extractor.load(finalUrl, data, subtitleCallback, cb)
+                        } else {
+                            loadExtractor(finalUrl, data, subtitleCallback, cb)
+                        }
+                        return@forEach
+                    }
                 } catch (_: Exception) {}
+
+                // Fallback si no decodifica
+                loadExtractor(fixedUrl, data, subtitleCallback, cb)
+                return@forEach
             }
 
             // =========================
-            // 🔥 RESTO (SIN ROMPER)
+            // Resto de servers (con fallback genérico)
             // =========================
             else when {
 
@@ -202,8 +223,29 @@ class SoloLatino : MainAPI() {
                     Embed69Extractor.load(fixedUrl, data, subtitleCallback, cb)
                 }
 
+                // Puedes agregar más customs aquí si ves que Filemoon/Vidhide fallan
+                // Ejemplo rápido para Filemoon/Vidhide si packed JS
+                fixedUrl.contains("filemoon") || fixedUrl.contains("vidhide") -> {
+                    try {
+                        val html = app.get(fixedUrl, headers = mapOf("Referer" to data)).text
+                        val packed = Regex("""eval\(function\(p,a,c,k,e,d.*?\)\)""", RegexOption.DOT_MATCHES_ALL).find(html)?.value
+                        if (packed != null) {
+                            val unpacked = JsUnpacker(packed).unpack() ?: ""
+                            Regex("""https?:\/\/[^\s"']+\.m3u8""").find(unpacked)?.value?.let { m3u8 ->
+                                callback(
+                                    newExtractorLink("Filemoon/Vidhide Fix", "HLS", m3u8) {
+                                        type = ExtractorLinkType.M3U8
+                                        referer = fixedUrl
+                                        headers = mapOf("Referer" to fixedUrl)
+                                    }
+                                )
+                            }
+                        }
+                    } catch (_: Exception) {}
+                    loadExtractor(fixedUrl, data, subtitleCallback, cb)
+                }
+
                 else -> {
-                    // 🔥 usar SIEMPRE extractor oficial
                     loadExtractor(fixedUrl, data, subtitleCallback, cb)
                 }
             }
@@ -213,7 +255,7 @@ class SoloLatino : MainAPI() {
     }
 
     // =========================
-    // MIRRORS
+    // MIRRORS FIX (sin cambios)
     // =========================
     private fun fixHostsLinks(url: String): String {
         return url
