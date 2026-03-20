@@ -25,8 +25,8 @@ class SoloLatino : MainAPI() {
 
         val doc = app.get(mainUrl).document
 
-        val lists = mutableListOf<HomePageList>()
-        val tokyo = mutableListOf<HomePageList>()
+        val normal = mutableListOf<HomePageList>()
+        val tokio = mutableListOf<HomePageList>()
 
         doc.select("section").forEach { section ->
 
@@ -67,15 +67,15 @@ class SoloLatino : MainAPI() {
             val list = HomePageList(title, items)
 
             if (title.lowercase().contains("tokio")) {
-                tokyo.add(list)
+                tokio.add(list)
             } else {
-                lists.add(list)
+                normal.add(list)
             }
         }
 
-        lists.addAll(tokyo)
+        normal.addAll(tokio)
 
-        return newHomePageResponse(lists)
+        return newHomePageResponse(normal)
     }
 
     // =========================
@@ -136,7 +136,7 @@ class SoloLatino : MainAPI() {
     }
 
     // =========================
-    // LINKS (FIX TOTAL)
+    // LINKS (FIX REAL)
     // =========================
     override suspend fun loadLinks(
         data: String,
@@ -162,9 +162,7 @@ class SoloLatino : MainAPI() {
 
         if (servers.isEmpty()) return false
 
-        val sorted = servers.distinct()
-
-        sorted.forEach { originalUrl ->
+        servers.distinct().forEach { originalUrl ->
 
             val fixedUrl = fixHostsLinks(originalUrl.trim())
 
@@ -174,7 +172,7 @@ class SoloLatino : MainAPI() {
             }
 
             // =========================
-            // 🔥 TOKYO MX / BASE64 FIX
+            // 🔥 TOKYO MX BASE64
             // =========================
             if (originalUrl.contains("re.sololatino.net")) {
 
@@ -182,31 +180,12 @@ class SoloLatino : MainAPI() {
                     val decoded = Regex("""link=([^&]+)""")
                         .find(originalUrl)
                         ?.groupValues?.getOrNull(1)
-                        ?.let {
-                            String(Base64.decode(it, Base64.DEFAULT))
-                        }
+                        ?.let { String(Base64.decode(it, Base64.DEFAULT)) }
 
                     if (!decoded.isNullOrEmpty()) {
-
                         val finalUrl = fixHostsLinks(decoded)
 
                         loadExtractor(finalUrl, originalUrl, subtitleCallback, callback)
-
-                        if (finalUrl.endsWith(".mp4") || finalUrl.contains(".m3u8")) {
-                            callback.invoke(
-                                newExtractorLink(
-                                    "TokyoMX",
-                                    "Direct",
-                                    finalUrl
-                                ) {
-                                    this.type = if (finalUrl.contains("m3u8"))
-                                        ExtractorLinkType.M3U8
-                                    else ExtractorLinkType.VIDEO
-
-                                    this.referer = originalUrl
-                                }
-                            )
-                        }
 
                         return@forEach
                     }
@@ -215,61 +194,7 @@ class SoloLatino : MainAPI() {
             }
 
             // =========================
-            // 🔥 OK.RU + MP4UPLOAD FIX
-            // =========================
-            else if (fixedUrl.contains("ok.ru") || fixedUrl.contains("mp4upload")) {
-
-                try {
-                    var extracted = false
-
-                    loadExtractor(fixedUrl, data, subtitleCallback) {
-                        extracted = true
-                        callback.invoke(it)
-                    }
-
-                    if (!extracted) {
-
-                        val html = app.get(fixedUrl).text
-
-                        Regex("""https?://[^"'\s<>()]+?\.(mp4|m3u8)""")
-                            .findAll(html)
-                            .forEach {
-
-                                val link = it.value
-
-                                callback.invoke(
-                                    newExtractorLink(
-                                        "Direct Fix",
-                                        if (link.contains("m3u8")) "HLS" else "MP4",
-                                        link
-                                    ) {
-                                        this.type = if (link.contains("m3u8"))
-                                            ExtractorLinkType.M3U8
-                                        else ExtractorLinkType.VIDEO
-
-                                        this.referer = "https://ok.ru/"
-                                    }
-                                )
-                            }
-
-                        Regex("""og:video["'][^>]+content=["']([^"']+)""")
-                            .find(html)
-                            ?.groupValues?.getOrNull(1)
-                            ?.let {
-                                callback.invoke(
-                                    newExtractorLink("OK.ru OG", "MP4", it) {
-                                        this.type = ExtractorLinkType.VIDEO
-                                        this.referer = "https://ok.ru/"
-                                    }
-                                )
-                            }
-                    }
-
-                } catch (_: Exception) {}
-            }
-
-            // =========================
-            // RESTO
+            // 🔥 RESTO (SIN ROMPER)
             // =========================
             else when {
 
@@ -277,15 +202,8 @@ class SoloLatino : MainAPI() {
                     Embed69Extractor.load(fixedUrl, data, subtitleCallback, cb)
                 }
 
-                fixedUrl.endsWith(".mp4") -> {
-                    callback.invoke(
-                        newExtractorLink("Direct", "MP4", fixedUrl) {
-                            this.type = ExtractorLinkType.VIDEO
-                        }
-                    )
-                }
-
                 else -> {
+                    // 🔥 usar SIEMPRE extractor oficial
                     loadExtractor(fixedUrl, data, subtitleCallback, cb)
                 }
             }
