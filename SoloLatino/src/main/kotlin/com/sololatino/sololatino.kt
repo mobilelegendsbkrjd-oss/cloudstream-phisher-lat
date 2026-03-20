@@ -3,7 +3,6 @@ package com.sololatino
 import android.util.Base64
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import kotlinx.coroutines.*
 
 class SoloLatino : MainAPI() {
 
@@ -17,56 +16,24 @@ class SoloLatino : MainAPI() {
         TvType.TvSeries
     )
 
-    private var lastServer: String? = null
-    private var nextEpisodeUrl: String? = null
-
-    // =========================
-    // 🎨 UI DECORATOR
-    // =========================
-    private fun decorateTitle(title: String): String {
-        val t = title.lowercase()
-
-        return when {
-            t.contains("netflix") -> "🟥 ɴᴇᴛꜰʟɪx"
-            t.contains("amazon") -> "🟦 ᴀᴍᴀᴢᴏɴ ᴘʀɪᴍᴇ"
-            t.contains("disney") -> "🟦 ᴅɪsɴᴇʏ ➕"
-            t.contains("hbo") -> "🟪 ʜʙᴏ ᴍᴀx"
-            t.contains("apple") -> "🍎 ᴀᴘᴘʟᴇ ᴛᴠ"
-            t.contains("hulu") -> "🟩 ʜᴜʟᴜ"
-            t.contains("paramount") -> "🏔️ ᴘᴀʀᴀᴍᴏᴜɴᴛ"
-
-            t.contains("tokyo mx") -> "🌸 ᴛᴏᴋʏᴏ ᴍx 🔞"
-            t.contains("tv tokio") -> "📺 ᴛᴠ ᴛᴏᴋɪᴏ"
-
-            t.contains("pelicula") -> "🎬 ᴘᴇʟɪᴄᴜʟᴀs"
-            t.contains("serie") -> "📺 sᴇʀɪᴇs"
-            t.contains("anime") -> "🌸 ᴀɴɪᴍᴇ"
-
-            else -> "🎬 $title"
-        }
-    }
-
     // =========================
     // MAIN PAGE
     // =========================
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
 
         val doc = app.get(mainUrl).document
 
         val normal = mutableListOf<HomePageList>()
-        val tokyo = mutableListOf<HomePageList>()
+        val tokio = mutableListOf<HomePageList>()
 
         doc.select("section").forEach { section ->
 
-            val rawTitle = section.selectFirst("h2")?.text() ?: return@forEach
+            val title = section.selectFirst("h2")?.text() ?: return@forEach
 
             if (
-                rawTitle.contains("Últimos", true) ||
-                rawTitle.contains("Recientes", true) ||
-                rawTitle.contains("Añadidos", true)
+                title.contains("Últimos", true) ||
+                title.contains("Recientes", true) ||
+                title.contains("Añadidos", true)
             ) return@forEach
 
             val items = section.select(".card").mapNotNull { card ->
@@ -95,16 +62,16 @@ class SoloLatino : MainAPI() {
 
             if (items.isEmpty()) return@forEach
 
-            val list = HomePageList(decorateTitle(rawTitle), items)
+            val list = HomePageList(title, items)
 
-            if (rawTitle.lowercase().contains("tokyo mx")) {
-                tokyo.add(list)
+            if (title.lowercase().contains("tokio")) {
+                tokio.add(list)
             } else {
                 normal.add(list)
             }
         }
 
-        normal.addAll(tokyo)
+        normal.addAll(tokio)
 
         return newHomePageResponse(normal)
     }
@@ -116,39 +83,19 @@ class SoloLatino : MainAPI() {
 
         val doc = app.get(url).document
 
-        val rawTitle = doc.selectFirst("meta[property=og:title]")
-            ?.attr("content") ?: "Sin título"
-
-        val title = rawTitle
-            .substringBefore("|")
-            .replace(Regex("""^Ver\s+""", RegexOption.IGNORE_CASE), "")
-            .replace("Latino", "", true)
-            .replace(Regex("""\(\d{4}\)"""), "")
-            .replace("Online", "", true)
-            .trim()
+        val title = doc.selectFirst("meta[property=og:title]")
+            ?.attr("content")
+            ?.substringBefore("|")
+            ?.replace(Regex("""^Ver\s+""", RegexOption.IGNORE_CASE), "")
+            ?.replace("Latino", "", true)
+            ?.replace(Regex("""\(\d{4}\)"""), "")
+            ?.replace("Online", "", true)
+            ?.trim() ?: "Sin título"
 
         val poster = doc.selectFirst("meta[property=og:image]")?.attr("content")
 
         val plot = doc.selectFirst("meta[name=description]")
             ?.attr("content") ?: ""
-
-        val isAdult = doc.select(".detail-field span")
-            .any {
-                val t = it.text().lowercase()
-                t.contains("adult") || t.contains("hentai") || t.contains("erotic")
-            }
-
-        val tags = mutableListOf<String>()
-        if (isAdult) tags.add("🔞 Adultos")
-
-        val eps = doc.select("a.ep-item")
-
-        nextEpisodeUrl = eps
-            .dropWhile { fixUrl(it.attr("href")) != url }
-            .drop(1)
-            .firstOrNull()
-            ?.attr("href")
-            ?.let { fixUrl(it) }
 
         val isSeries = url.contains("/serie/")
 
@@ -157,14 +104,11 @@ class SoloLatino : MainAPI() {
             newMovieLoadResponse(title, url, TvType.Movie, url) {
                 this.posterUrl = poster
                 this.plot = plot
-                this.tags = tags
             }
 
         } else {
 
-            val episodes = mutableListOf<Episode>()
-
-            eps.forEach { ep ->
+            val episodes = doc.select("a.ep-item").map { ep ->
 
                 val epUrl = fixUrl(ep.attr("href"))
 
@@ -172,27 +116,61 @@ class SoloLatino : MainAPI() {
                     ?.text()?.replace("E", "")?.toIntOrNull()
 
                 val name = ep.selectFirst("p.text-sm")?.text()
+
                 val thumb = ep.selectFirst("img")?.attr("src")
 
-                episodes.add(
-                    newEpisode(epUrl) {
-                        this.name = name
-                        this.episode = num
-                        this.posterUrl = thumb ?: poster
-                    }
-                )
+                newEpisode(epUrl) {
+                    this.name = name
+                    this.episode = num
+                    this.posterUrl = thumb ?: poster
+                }
             }
 
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.plot = plot
-                this.tags = tags
             }
         }
     }
 
     // =========================
-    // LINKS (FULL FIX)
+    // 🔥 FALLBACK UNPACK (SOLO SI FALLA)
+    // =========================
+    private suspend fun tryUnpack(
+        url: String,
+        referer: String,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val html = app.get(url, headers = mapOf("Referer" to referer)).text
+
+            val packed = Regex(
+                """eval\(function\(p,a,c,k,e,d.*?\)\)""",
+                RegexOption.DOT_MATCHES_ALL
+            ).find(html)?.value ?: return
+
+            val unpacked = JsUnpacker(packed).unpack() ?: return
+
+            Regex("""https?:\/\/[^\s"']+\.m3u8""")
+                .find(unpacked)?.value?.let { m3u8 ->
+
+                    callback.invoke(
+                        newExtractorLink(
+                            "Unpacked",
+                            "HLS",
+                            m3u8
+                        ) {
+                            this.type = ExtractorLinkType.M3U8
+                            this.referer = url
+                        }
+                    )
+                }
+
+        } catch (_: Exception) {}
+    }
+
+    // =========================
+    // LINKS (FINAL REAL)
     // =========================
     override suspend fun loadLinks(
         data: String,
@@ -202,14 +180,11 @@ class SoloLatino : MainAPI() {
     ): Boolean {
 
         val doc = app.get(data).document
-
         val servers = mutableListOf<String>()
 
-        // 🔥 NORMAL
         servers += doc.select("[data-server-btn]")
             .mapNotNull { it.attr("data-server-url") }
 
-        // 🔥 ANIME onclick
         servers += doc.select("li[onclick]")
             .mapNotNull {
                 Regex("""go_to_player\('([^']+)""")
@@ -217,58 +192,95 @@ class SoloLatino : MainAPI() {
                     ?.groupValues?.getOrNull(1)
             }
 
-        if (servers.isEmpty()) return false
+        val clean = servers
+            .map { it.trim() }
+            .filter { it.startsWith("http") }
+            .distinct()
 
-        val sorted = servers.sortedBy {
-            if (lastServer != null && it.contains(lastServer!!)) 0 else 1
-        }
+        if (clean.isEmpty()) return false
 
-        var isFirst = true
+        clean.forEach { originalUrl ->
 
-        sorted.forEach { url ->
+            val fixed = fixHostsLinks(originalUrl)
 
-            val fixedUrl = when {
+            // =========================
+            // 🔥 TOKYO MX BASE64
+            // =========================
+            if (originalUrl.contains("re.sololatino.net")) {
 
-                // 🔥 BASE64 decode
-                url.contains("re.sololatino.net") -> {
-                    Regex("""link=([^&]+)""")
-                        .find(url)
+                try {
+                    val decoded = Regex("""link=([^&]+)""")
+                        .find(originalUrl)
                         ?.groupValues?.getOrNull(1)
-                        ?.let {
-                            try {
-                                String(Base64.decode(it, Base64.DEFAULT))
-                            } catch (_: Exception) { null }
-                        } ?: url
-                }
+                        ?.let { String(Base64.decode(it, Base64.DEFAULT)) }
 
-                else -> url
+                    if (!decoded.isNullOrEmpty()) {
+                        loadExtractor(decoded, originalUrl, subtitleCallback, callback)
+                        return@forEach
+                    }
+
+                } catch (_: Exception) {}
             }
 
-            val serverName = fixedUrl.substringAfter("//").substringBefore("/")
-
-            val cb: (ExtractorLink) -> Unit = { link ->
-
-                lastServer = serverName
-
-                if (isFirst) {
-                    isFirst = false
-                    callback.invoke(link)
-                }
-
-                callback.invoke(link)
+            // =========================
+            // 🔥 EMBED69
+            // =========================
+            if (fixed.contains("embed69")) {
+                Embed69Extractor.load(fixed, originalUrl, subtitleCallback, callback)
+                return@forEach
             }
 
-            when {
-                fixedUrl.contains("embed69") -> {
-                    Embed69Extractor.load(fixedUrl, data, subtitleCallback, cb)
-                }
+            // =========================
+            // 🔥 EXTRACTOR + FALLBACK
+            // =========================
+            var found = false
 
-                else -> {
-                    loadExtractor(fixedUrl, data, subtitleCallback, cb)
-                }
+            loadExtractor(fixed, originalUrl, subtitleCallback) {
+                found = true
+                callback.invoke(it)
+            }
+
+            if (!found) {
+                tryUnpack(fixed, originalUrl, callback)
             }
         }
 
         return true
+    }
+
+    // =========================
+    // MIRRORS
+    // =========================
+    private fun fixHostsLinks(url: String): String {
+        return url
+            .replace("hglink.to", "streamwish.to")
+            .replace("swdyu.com", "streamwish.to")
+            .replace("cybervynx.com", "streamwish.to")
+            .replace("dumbalag.com", "streamwish.to")
+            .replace("wishembed.com", "streamwish.to")
+            .replace("stwishe.com", "streamwish.to")
+
+            .replace("mivalyo.com", "vidhidepro.com")
+            .replace("dinisglows.com", "vidhidepro.com")
+            .replace("dhtpre.com", "vidhidepro.com")
+            .replace("vidhide.com", "vidhidepro.com")
+            .replace("voidboost.net", "vidhidepro.com")
+
+            .replace("filemoon.link", "filemoon.sx")
+            .replace("filemoon.lat", "filemoon.sx")
+
+            .replace("ok.ru/videoembed/", "ok.ru/video/")
+
+            .replace("do7go.com", "dood.la")
+            .replace("doodstream.com", "dood.la")
+
+            .replace("sblona.com", "watchsb.com")
+            .replace("sbfull.com", "watchsb.com")
+
+            .replace("lulu.st", "lulustream.com")
+
+            .replace("uqload.io", "uqload.com")
+
+            .replace("voe.sx", "voe.unblockit.cat")
     }
 }

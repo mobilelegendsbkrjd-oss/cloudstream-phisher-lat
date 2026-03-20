@@ -6,7 +6,6 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
-import com.lagradost.cloudstream3.utils.newExtractorLink
 
 object Embed69Extractor {
 
@@ -37,8 +36,8 @@ object Embed69Extractor {
             .forEach {
                 subtitleCallback(
                     SubtitleFile(
-                        it.groupValues[1],
-                        it.groupValues[2]
+                        it.groupValues[2],
+                        it.groupValues[1]
                     )
                 )
             }
@@ -58,8 +57,7 @@ object Embed69Extractor {
             when {
                 name.contains("LAT") -> 1
                 name.contains("SUB") -> 2
-                name.contains("ESP") -> 3
-                else -> 4
+                else -> 3
             }
         }
 
@@ -67,12 +65,10 @@ object Embed69Extractor {
 
             val linksJson = lang.sortedEmbeds
                 .mapNotNull { it.link }
-                .distinct() // 🔥 evita duplicados
                 .joinToString(prefix = "[", postfix = "]") { "\"$it\"" }
 
-            val json = """{"links":$linksJson}"""
-
-            val body = json.toRequestBody("application/json".toMediaTypeOrNull())
+            val body = """{"links":$linksJson}"""
+                .toRequestBody("application/json".toMediaTypeOrNull())
 
             val decrypted = app.post(
                 DECRYPT_URL,
@@ -82,22 +78,7 @@ object Embed69Extractor {
 
             if (!decrypted.success) return@forEach
 
-            // 🔥 ORDEN MEJORADO
-            val sortedLinks = decrypted.links
-                .distinctBy { it.link }
-                .sortedBy {
-                    val u = it.link.lowercase()
-                    when {
-                        u.contains("voe") && u.contains("mp4") -> 1
-                        u.contains("voe") -> 2
-                        u.contains("filemoon") -> 3
-                        u.contains("streamwish") -> 4
-                        u.contains("minochinos") -> 5
-                        else -> 6
-                    }
-                }
-
-            sortedLinks.forEach { linkItem ->
+            decrypted.links.forEach { linkItem ->
 
                 val fixed = fixHostsLinks(linkItem.link)
 
@@ -105,34 +86,19 @@ object Embed69Extractor {
 
                     // 🔥 MINOCHINOS
                     fixed.contains("minochinos") -> {
-                        extractMinochinos(
-                            fixed,
-                            referer,
-                            callback
-                        )
+                        extractMinochinos(fixed, referer, callback)
                     }
 
                     // 🔥 VIDHIDE
                     fixed.contains("vidhide") ||
-                            fixed.contains("mivalyo") ||
-                            fixed.contains("dhtpre") -> {
-
-                        extractVidHide(
-                            fixed,
-                            referer,
-                            callback
-                        )
+                    fixed.contains("mivalyo") ||
+                    fixed.contains("dhtpre") -> {
+                        extractVidHide(fixed, referer, callback)
                     }
 
-                    // 🔥 DEFAULT
+                    // 🔥 DEFAULT (IMPORTANTE: SIN COROUTINES)
                     else -> {
-                        loadSourceNameExtractor(
-                            lang.videoLanguage ?: "Unknown",
-                            fixed,
-                            referer,
-                            subtitleCallback,
-                            callback
-                        )
+                        loadExtractor(fixed, referer, subtitleCallback, callback)
                     }
                 }
             }
@@ -148,14 +114,7 @@ object Embed69Extractor {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val html = app.get(
-                url,
-                headers = mapOf(
-                    "User-Agent" to "Mozilla/5.0",
-                    "Referer" to referer,
-                    "Origin" to "https://minochinos.com"
-                )
-            ).text
+            val html = app.get(url).text
 
             Regex("""https?:\/\/[^\s"']+master\.m3u8""")
                 .find(html)
@@ -164,7 +123,7 @@ object Embed69Extractor {
                     callback.invoke(
                         newExtractorLink(
                             "Minochinos",
-                            "Minochinos",
+                            "Minochinos HLS",
                             master
                         ) {
                             this.type = ExtractorLinkType.M3U8
@@ -174,8 +133,7 @@ object Embed69Extractor {
                     )
                 }
 
-        } catch (_: Exception) {
-        }
+        } catch (_: Exception) {}
     }
 
     // =========================
@@ -187,13 +145,7 @@ object Embed69Extractor {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val html = app.get(
-                url,
-                headers = mapOf(
-                    "User-Agent" to "Mozilla/5.0",
-                    "Referer" to referer
-                )
-            ).text
+            val html = app.get(url).text
 
             val packed = Regex("""eval\(function\(p,a,c,k,e,d.*?\)\)""", RegexOption.DOT_MATCHES_ALL)
                 .find(html)?.value ?: return
@@ -201,7 +153,8 @@ object Embed69Extractor {
             val unpacked = JsUnpacker(packed).unpack() ?: return
 
             Regex("""https?:\/\/[^\s"']+\.m3u8""")
-                .find(unpacked)?.value?.let { m3u8 ->
+                .find(unpacked)
+                ?.value?.let { m3u8 ->
 
                     callback.invoke(
                         newExtractorLink(
@@ -216,26 +169,7 @@ object Embed69Extractor {
                     )
                 }
 
-        } catch (_: Exception) {
-        }
-    }
-
-    // =========================
-    // DEFAULT (RESPETA TU API)
-    // =========================
-    private suspend fun loadSourceNameExtractor(
-        source: String,
-        url: String,
-        referer: String? = null,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit,
-    ) {
-
-        loadExtractor(url, referer, subtitleCallback) { link ->
-
-            // 🔥 SOLO reenviamos el link (SIN newExtractorLink)
-            callback.invoke(link)
-        }
+        } catch (_: Exception) {}
     }
 
     // =========================
