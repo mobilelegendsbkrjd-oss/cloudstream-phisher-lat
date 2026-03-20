@@ -14,8 +14,15 @@ object Embed69Extractor {
     private val HEADERS = mapOf(
         "User-Agent" to "Mozilla/5.0",
         "Referer" to "https://embed69.org/",
-        "Origin" to "https://embed69.org",
-        "Accept" to "*/*"
+        "Origin" to "https://embed69.org"
+    )
+
+    private val hgDomains = listOf("hglink.to", "hgcloud.to")
+    private val hgRedirects = listOf(
+        "vibuxer.com",
+        "audinifer.com",
+        "masukestin.com",
+        "hanerix.com"
     )
 
     suspend fun load(
@@ -25,43 +32,29 @@ object Embed69Extractor {
         callback: (ExtractorLink) -> Unit
     ) {
 
-        val res = app.get(url, headers = HEADERS)
-        val html = res.text
+        val html = app.get(url, headers = HEADERS).text
 
-        // =========================
-        // 🔥 SUBTÍTULOS
-        // =========================
+        // Subs
         Regex("""<track[^>]*src="([^"]*\.vtt)"[^>]*label="([^"]*)"""")
             .findAll(html)
             .forEach {
-                subtitleCallback(
-                    SubtitleFile(
-                        it.groupValues[2],
-                        it.groupValues[1]
-                    )
-                )
+                subtitleCallback(SubtitleFile(it.groupValues[2], it.groupValues[1]))
             }
 
-        // =========================
-        // 🔥 DATA LINK
-        // =========================
+        // Xupalace detect
+        Regex("""go_to_playerVast\('([^']+)""")
+            .findAll(html)
+            .forEach {
+                extractXupalace(it.groupValues[1], url, callback)
+            }
+
+        // API decrypt
         val dataLink = Regex("""dataLink\s*=\s*(\[.*?\]);""")
-            .find(html)
-            ?.groupValues?.getOrNull(1)
-            ?: return
+            .find(html)?.groupValues?.getOrNull(1) ?: return
 
         val parsed = AppUtils.tryParseJson<List<ServersByLang>>(dataLink) ?: return
 
-        val sortedLangs = parsed.sortedBy {
-            val name = it.videoLanguage?.uppercase() ?: ""
-            when {
-                name.contains("LAT") -> 1
-                name.contains("SUB") -> 2
-                else -> 3
-            }
-        }
-
-        sortedLangs.forEach { lang ->
+        parsed.forEach { lang ->
 
             val linksJson = lang.sortedEmbeds
                 .mapNotNull { it.link }
@@ -76,80 +69,152 @@ object Embed69Extractor {
                 headers = HEADERS
             ).parsedSafe<Loadlinks>() ?: return@forEach
 
-            if (!decrypted.success) return@forEach
-
-            decrypted.links.forEach { linkItem ->
-
-                val fixed = fixHostsLinks(linkItem.link)
-
-                when {
-
-                    // =========================
-                    // 🔥 MINOCHINOS (FIX REAL)
-                    // =========================
-                    fixed.contains("minochinos") -> {
-                        extractMinochinos(fixed, referer, callback)
-                    }
-
-                    // =========================
-                    // 🔥 VIDHIDE
-                    // =========================
-                    fixed.contains("vidhide") ||
-                            fixed.contains("mivalyo") ||
-                            fixed.contains("dhtpre") -> {
-                        extractVidHide(fixed, referer, callback)
-                    }
-
-                    // =========================
-                    // 🔥 DEFAULT
-                    // =========================
-                    else -> {
-                        loadExtractor(fixed, referer, subtitleCallback, callback)
-                    }
-                }
+            decrypted.links.forEach {
+                handleServer(it.link, url, callback)
             }
         }
     }
 
     // =========================
-    // 🔥 MINOCHINOS (FULL FIX)
+    // ROUTER
     // =========================
-    private suspend fun extractMinochinos(
+    private suspend fun handleServer(
+        url: String,
+        referer: String,
+        callback: (ExtractorLink) -> Unit
+    ) {
+
+        val fixed = fixHostsLinks(url)
+
+        when {
+
+            fixed.contains("xupalace") -> {
+                extractXupalace(fixed, referer, callback)
+            }
+
+            hgDomains.any { fixed.contains(it) } ||
+                    hgRedirects.any { fixed.contains(it) } -> {
+                extractHGLink(fixed, referer, callback)
+            }
+
+            fixed.contains("vidhide") -> {
+                extractVidHide(fixed, referer, callback)
+            }
+
+            else -> {
+                loadExtractor(fixed, referer, { }, callback)
+            }
+        }
+    }
+
+    // =========================
+    // XUPALACE
+    // =========================
+    private suspend fun extractXupalace(
         url: String,
         referer: String,
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val html = app.get(url, headers = mapOf("Referer" to referer)).text
+            val html = app.get(url, referer = referer).text
 
-            // 🔥 JWPLAYER style
-            val m3u8 = Regex("""file\s*:\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)""")
-                .find(html)
-                ?.groupValues?.getOrNull(1)
-                ?: Regex("""https?:\/\/[^\s"']+\.m3u8""")
-                    .find(html)
-                    ?.value
+            val next = Regex("""https?://[^\s"'<>]+""")
+                .findAll(html)
+                .map { it.value }
+                .firstOrNull {
+                    hgDomains.any { d -> it.contains(d) } ||
+                            hgRedirects.any { d -> it.contains(d) }
+                } ?: return
 
-            if (!m3u8.isNullOrEmpty()) {
-
-                callback.invoke(
-                    newExtractorLink(
-                        "Minochinos",
-                        "Minochinos HLS",
-                        m3u8
-                    ) {
-                        this.type = ExtractorLinkType.M3U8
-                        this.referer = url // 🔥 CLAVE
-                        this.quality = getQualityFromName("720p")
-                    }
-                )
-            }
+            extractHGLink(next, url, callback)
 
         } catch (_: Exception) {}
     }
 
     // =========================
-    // 🔥 VIDHIDE
+    // HG FLOW (REDIRECT FIX)
+    // =========================
+    private suspend fun extractHGLink(
+        url: String,
+        referer: String,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val res = app.get(url, referer = referer)
+
+            val finalUrl = res.url?.toString() ?: url
+
+            // si ya redirigió
+            if (hgRedirects.any { finalUrl.contains(it) }) {
+                extractHGPlayer(finalUrl, callback)
+                return
+            }
+
+            val html = res.text
+
+            val next = Regex("""https?://[^\s"'<>]+""")
+                .findAll(html)
+                .map { it.value }
+                .firstOrNull {
+                    hgRedirects.any { d -> it.contains(d) }
+                } ?: return
+
+            extractHGPlayer(next, callback)
+
+        } catch (_: Exception) {}
+    }
+
+    // =========================
+    // PLAYER (VIBUXER / AUDINIFER)
+    // =========================
+    private suspend fun extractHGPlayer(
+        url: String,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val html = app.get(url).text
+
+            val packed = Regex(
+                """eval\(function\(p,a,c,k,e,d.*?\)\)""",
+                RegexOption.DOT_MATCHES_ALL
+            ).find(html)?.value ?: return
+
+            val unpacked = JsUnpacker(packed).unpack() ?: return
+
+            val obj = Regex("""var\s+o\s*=\s*\{(.*?)\}""",
+                RegexOption.DOT_MATCHES_ALL)
+                .find(unpacked)
+                ?.groupValues?.getOrNull(1) ?: return
+
+            val map = Regex(""""(.*?)"\s*:\s*"(.*?)"""")
+                .findAll(obj)
+                .associate {
+                    it.groupValues[1] to it.groupValues[2]
+                }
+
+            var video = map["1c"] ?: map["1m"] ?: map["1f"] ?: return
+
+            val base = url.substringBefore("/e/")
+            if (video.startsWith("/")) {
+                video = base + video
+            }
+
+            callback.invoke(
+                newExtractorLink(
+                    "HGStream",
+                    "HGStream",
+                    video
+                ) {
+                    this.type = ExtractorLinkType.M3U8
+                    this.referer = url
+                }
+            )
+
+        } catch (_: Exception) {}
+    }
+
+    // =========================
+    // VIDHIDE
     // =========================
     private suspend fun extractVidHide(
         url: String,
@@ -157,26 +222,22 @@ object Embed69Extractor {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val html = app.get(url).text
+            val html = app.get(url, referer = referer).text
 
-            val packed = Regex("""eval\(function\(p,a,c,k,e,d.*?\)\)""", RegexOption.DOT_MATCHES_ALL)
-                .find(html)?.value ?: return
+            val packed = Regex(
+                """eval\(function\(p,a,c,k,e,d.*?\)\)""",
+                RegexOption.DOT_MATCHES_ALL
+            ).find(html)?.value ?: return
 
             val unpacked = JsUnpacker(packed).unpack() ?: return
 
-            Regex("""https?:\/\/[^\s"']+\.m3u8""")
+            Regex("""https?://[^\s"']+\.m3u8""")
                 .find(unpacked)
-                ?.value?.let { m3u8 ->
-
+                ?.value?.let {
                     callback.invoke(
-                        newExtractorLink(
-                            "VidHide",
-                            "VidHide HLS",
-                            m3u8
-                        ) {
+                        newExtractorLink("VidHide", "HLS", it) {
                             this.type = ExtractorLinkType.M3U8
                             this.referer = url
-                            this.quality = getQualityFromName("720p")
                         }
                     )
                 }
@@ -184,19 +245,15 @@ object Embed69Extractor {
         } catch (_: Exception) {}
     }
 
-    // =========================
-    // 🔥 FIX HOSTS
-    // =========================
     private fun fixHostsLinks(url: String): String {
         return url
-            .replace("hglink.to", "streamwish.to")
             .replace("filemoon.link", "filemoon.sx")
             .replace("do7go.com", "dood.la")
     }
 }
 
 // =========================
-// DATA CLASSES
+// DATA
 // =========================
 
 data class Server(

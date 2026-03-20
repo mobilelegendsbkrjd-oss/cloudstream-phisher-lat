@@ -17,7 +17,6 @@ class SoloLatino : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-
         val doc = app.get(mainUrl).document
 
         val normal = mutableListOf<HomePageList>()
@@ -127,39 +126,6 @@ class SoloLatino : MainAPI() {
         }
     }
 
-    private suspend fun tryUnpack(
-        url: String,
-        referer: String,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        try {
-            val html = app.get(url, headers = mapOf("Referer" to referer)).text
-
-            val packed = Regex(
-                """eval\(function\(p,a,c,k,e,d.*?\)\)""",
-                RegexOption.DOT_MATCHES_ALL
-            ).find(html)?.value ?: return
-
-            val unpacked = JsUnpacker(packed).unpack() ?: return
-
-            Regex("""https?:\/\/[^\s"']+\.m3u8""")
-                .find(unpacked)?.value?.let { m3u8 ->
-
-                    callback.invoke(
-                        newExtractorLink(
-                            "Unpacked",
-                            "HLS",
-                            m3u8
-                        ) {
-                            this.type = ExtractorLinkType.M3U8
-                            this.referer = url
-                        }
-                    )
-                }
-
-        } catch (_: Exception) {}
-    }
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -168,8 +134,64 @@ class SoloLatino : MainAPI() {
     ): Boolean {
 
         val doc = app.get(data).document
+        val html = doc.html()
+
         val servers = mutableListOf<String>()
 
+        // =========================
+        // NUEVO PLAYER
+        // =========================
+        Regex("""data-server-url="([^"]+)"[^>]+data-server-type="([^"]+)"""")
+            .findAll(html)
+            .forEach {
+
+                val url = it.groupValues[1]
+                val type = it.groupValues[2]
+
+                when (type) {
+
+                    "iframe" -> {
+                        val fixed = fixHostsLinks(fixUrl(url))
+                        if (fixed.contains("embed69")) {
+                            Embed69Extractor.load(fixed, data, subtitleCallback, callback)
+                        } else {
+                            loadExtractor(fixed, data, subtitleCallback, callback)
+                        }
+                    }
+
+                    "mp4" -> {
+                        callback.invoke(
+                            newExtractorLink("Direct", "MP4", url) {
+                                this.referer = data
+                            }
+                        )
+                    }
+
+                    else -> {
+                        val fixed = fixHostsLinks(fixUrl(url))
+                        loadExtractor(fixed, data, subtitleCallback, callback)
+                    }
+                }
+            }
+
+        // =========================
+        // IFRAME PRINCIPAL
+        // =========================
+        val iframe = doc.selectFirst("#player-frame iframe")?.attr("src")
+
+        if (!iframe.isNullOrEmpty()) {
+            val fixed = fixHostsLinks(fixUrl(iframe))
+
+            if (fixed.contains("embed69")) {
+                Embed69Extractor.load(fixed, data, subtitleCallback, callback)
+            } else {
+                loadExtractor(fixed, data, subtitleCallback, callback)
+            }
+        }
+
+        // =========================
+        // SERVERS VIEJOS
+        // =========================
         servers += doc.select("[data-server-btn]")
             .mapNotNull { it.attr("data-server-url") }
 
@@ -180,90 +202,28 @@ class SoloLatino : MainAPI() {
                     ?.groupValues?.getOrNull(1)
             }
 
-        // =========================
-        // 🔥 FALLBACK ANIME
-        // =========================
-        if (servers.isEmpty()) {
-
-            val iframe = doc.selectFirst("#player-frame iframe")
-                ?.attr("src")
-
-            if (!iframe.isNullOrEmpty()) {
-
-                val fixed = fixHostsLinks(fixUrl(iframe))
-
-                loadExtractor(fixed, data, subtitleCallback, callback)
-                tryUnpack(fixed, data, callback)
-
-                return true
+        servers += doc.select("li[onclick]")
+            .mapNotNull {
+                Regex("""go_to_playerVast\('([^']+)""")
+                    .find(it.attr("onclick"))
+                    ?.groupValues?.getOrNull(1)
             }
-
-            doc.select("script").forEach { script ->
-
-                val m3u8 = Regex("""https?:\/\/[^\s"']+\.m3u8""")
-                    .find(script.data())
-                    ?.value
-
-                if (!m3u8.isNullOrEmpty()) {
-
-                    callback.invoke(
-                        newExtractorLink(
-                            "Direct",
-                            "HLS",
-                            m3u8
-                        ) {
-                            this.type = ExtractorLinkType.M3U8
-                            this.referer = data
-                        }
-                    )
-
-                    return true
-                }
-            }
-        }
 
         val clean = servers
             .map { it.trim() }
             .filter { it.startsWith("http") }
             .distinct()
 
-        if (clean.isEmpty()) return true
-
         clean.forEach { originalUrl ->
 
             val fixed = fixHostsLinks(originalUrl)
 
-            // TOKYO BASE64
-            if (originalUrl.contains("re.sololatino.net")) {
-                try {
-                    val decoded = Regex("""link=([^&]+)""")
-                        .find(originalUrl)
-                        ?.groupValues?.getOrNull(1)
-                        ?.let { String(Base64.decode(it, Base64.DEFAULT)) }
-
-                    if (!decoded.isNullOrEmpty()) {
-                        loadExtractor(decoded, originalUrl, subtitleCallback, callback)
-                        return@forEach
-                    }
-                } catch (_: Exception) {}
-            }
-
-            // EMBED69
             if (fixed.contains("embed69")) {
                 Embed69Extractor.load(fixed, originalUrl, subtitleCallback, callback)
                 return@forEach
             }
 
-            var found = false
-
-            loadExtractor(fixed, originalUrl, subtitleCallback) {
-                found = true
-                callback.invoke(it)
-            }
-
-            if (!found) {
-                tryUnpack(fixed, originalUrl, callback)
-            }
+            loadExtractor(fixed, originalUrl, subtitleCallback, callback)
         }
 
         return true
@@ -271,7 +231,6 @@ class SoloLatino : MainAPI() {
 
     private fun fixHostsLinks(url: String): String {
         return url
-            .replace("hglink.to", "streamwish.to")
             .replace("swdyu.com", "streamwish.to")
             .replace("cybervynx.com", "streamwish.to")
             .replace("dumbalag.com", "streamwish.to")
@@ -288,7 +247,6 @@ class SoloLatino : MainAPI() {
             .replace("filemoon.lat", "filemoon.sx")
 
             .replace("ok.ru/videoembed/", "ok.ru/video/")
-
             .replace("do7go.com", "dood.la")
             .replace("doodstream.com", "dood.la")
 
@@ -296,9 +254,7 @@ class SoloLatino : MainAPI() {
             .replace("sbfull.com", "watchsb.com")
 
             .replace("lulu.st", "lulustream.com")
-
             .replace("uqload.io", "uqload.com")
-
             .replace("voe.sx", "voe.unblockit.cat")
     }
 }
