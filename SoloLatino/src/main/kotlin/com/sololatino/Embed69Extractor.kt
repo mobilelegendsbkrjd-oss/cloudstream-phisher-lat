@@ -29,7 +29,7 @@ object Embed69Extractor {
         val html = res.text
 
         // =========================
-        // SUBTÍTULOS
+        // 🔥 SUBTÍTULOS
         // =========================
         Regex("""<track[^>]*src="([^"]*\.vtt)"[^>]*label="([^"]*)"""")
             .findAll(html)
@@ -43,7 +43,7 @@ object Embed69Extractor {
             }
 
         // =========================
-        // DATA LINK
+        // 🔥 DATA LINK
         // =========================
         val dataLink = Regex("""dataLink\s*=\s*(\[.*?\]);""")
             .find(html)
@@ -84,19 +84,25 @@ object Embed69Extractor {
 
                 when {
 
-                    // 🔥 MINOCHINOS
+                    // =========================
+                    // 🔥 MINOCHINOS (FIX REAL)
+                    // =========================
                     fixed.contains("minochinos") -> {
                         extractMinochinos(fixed, referer, callback)
                     }
 
+                    // =========================
                     // 🔥 VIDHIDE
+                    // =========================
                     fixed.contains("vidhide") ||
-                    fixed.contains("mivalyo") ||
-                    fixed.contains("dhtpre") -> {
+                            fixed.contains("mivalyo") ||
+                            fixed.contains("dhtpre") -> {
                         extractVidHide(fixed, referer, callback)
                     }
 
-                    // 🔥 DEFAULT (IMPORTANTE: SIN COROUTINES)
+                    // =========================
+                    // 🔥 DEFAULT
+                    // =========================
                     else -> {
                         loadExtractor(fixed, referer, subtitleCallback, callback)
                     }
@@ -106,7 +112,7 @@ object Embed69Extractor {
     }
 
     // =========================
-    // MINOCHINOS
+    // 🔥 MINOCHINOS (FULL FIX)
     // =========================
     private suspend fun extractMinochinos(
         url: String,
@@ -114,30 +120,36 @@ object Embed69Extractor {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val html = app.get(url).text
+            val html = app.get(url, headers = mapOf("Referer" to referer)).text
 
-            Regex("""https?:\/\/[^\s"']+master\.m3u8""")
+            // 🔥 JWPLAYER style
+            val m3u8 = Regex("""file\s*:\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)""")
                 .find(html)
-                ?.value?.let { master ->
+                ?.groupValues?.getOrNull(1)
+                ?: Regex("""https?:\/\/[^\s"']+\.m3u8""")
+                    .find(html)
+                    ?.value
 
-                    callback.invoke(
-                        newExtractorLink(
-                            "Minochinos",
-                            "Minochinos HLS",
-                            master
-                        ) {
-                            this.type = ExtractorLinkType.M3U8
-                            this.referer = "https://minochinos.com/"
-                            this.quality = 720
-                        }
-                    )
-                }
+            if (!m3u8.isNullOrEmpty()) {
+
+                callback.invoke(
+                    newExtractorLink(
+                        "Minochinos",
+                        "Minochinos HLS",
+                        m3u8
+                    ) {
+                        this.type = ExtractorLinkType.M3U8
+                        this.referer = url // 🔥 CLAVE
+                        this.quality = getQualityFromName("720p")
+                    }
+                )
+            }
 
         } catch (_: Exception) {}
     }
 
     // =========================
-    // VIDHIDE
+    // 🔥 VIDHIDE
     // =========================
     private suspend fun extractVidHide(
         url: String,
@@ -164,7 +176,7 @@ object Embed69Extractor {
                         ) {
                             this.type = ExtractorLinkType.M3U8
                             this.referer = url
-                            this.quality = 720
+                            this.quality = getQualityFromName("720p")
                         }
                     )
                 }
@@ -173,7 +185,7 @@ object Embed69Extractor {
     }
 
     // =========================
-    // FIX HOSTS
+    // 🔥 FIX HOSTS
     // =========================
     private fun fixHostsLinks(url: String): String {
         return url

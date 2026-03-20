@@ -16,9 +16,6 @@ class SoloLatino : MainAPI() {
         TvType.TvSeries
     )
 
-    // =========================
-    // MAIN PAGE
-    // =========================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
 
         val doc = app.get(mainUrl).document
@@ -76,9 +73,6 @@ class SoloLatino : MainAPI() {
         return newHomePageResponse(normal)
     }
 
-    // =========================
-    // LOAD
-    // =========================
     override suspend fun load(url: String): LoadResponse {
 
         val doc = app.get(url).document
@@ -133,9 +127,6 @@ class SoloLatino : MainAPI() {
         }
     }
 
-    // =========================
-    // 🔥 FALLBACK UNPACK (SOLO SI FALLA)
-    // =========================
     private suspend fun tryUnpack(
         url: String,
         referer: String,
@@ -169,9 +160,6 @@ class SoloLatino : MainAPI() {
         } catch (_: Exception) {}
     }
 
-    // =========================
-    // LINKS (FINAL REAL)
-    // =========================
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -192,22 +180,61 @@ class SoloLatino : MainAPI() {
                     ?.groupValues?.getOrNull(1)
             }
 
+        // =========================
+        // 🔥 FALLBACK ANIME
+        // =========================
+        if (servers.isEmpty()) {
+
+            val iframe = doc.selectFirst("#player-frame iframe")
+                ?.attr("src")
+
+            if (!iframe.isNullOrEmpty()) {
+
+                val fixed = fixHostsLinks(fixUrl(iframe))
+
+                loadExtractor(fixed, data, subtitleCallback, callback)
+                tryUnpack(fixed, data, callback)
+
+                return true
+            }
+
+            doc.select("script").forEach { script ->
+
+                val m3u8 = Regex("""https?:\/\/[^\s"']+\.m3u8""")
+                    .find(script.data())
+                    ?.value
+
+                if (!m3u8.isNullOrEmpty()) {
+
+                    callback.invoke(
+                        newExtractorLink(
+                            "Direct",
+                            "HLS",
+                            m3u8
+                        ) {
+                            this.type = ExtractorLinkType.M3U8
+                            this.referer = data
+                        }
+                    )
+
+                    return true
+                }
+            }
+        }
+
         val clean = servers
             .map { it.trim() }
             .filter { it.startsWith("http") }
             .distinct()
 
-        if (clean.isEmpty()) return false
+        if (clean.isEmpty()) return true
 
         clean.forEach { originalUrl ->
 
             val fixed = fixHostsLinks(originalUrl)
 
-            // =========================
-            // 🔥 TOKYO MX BASE64
-            // =========================
+            // TOKYO BASE64
             if (originalUrl.contains("re.sololatino.net")) {
-
                 try {
                     val decoded = Regex("""link=([^&]+)""")
                         .find(originalUrl)
@@ -218,21 +245,15 @@ class SoloLatino : MainAPI() {
                         loadExtractor(decoded, originalUrl, subtitleCallback, callback)
                         return@forEach
                     }
-
                 } catch (_: Exception) {}
             }
 
-            // =========================
-            // 🔥 EMBED69
-            // =========================
+            // EMBED69
             if (fixed.contains("embed69")) {
                 Embed69Extractor.load(fixed, originalUrl, subtitleCallback, callback)
                 return@forEach
             }
 
-            // =========================
-            // 🔥 EXTRACTOR + FALLBACK
-            // =========================
             var found = false
 
             loadExtractor(fixed, originalUrl, subtitleCallback) {
@@ -248,9 +269,6 @@ class SoloLatino : MainAPI() {
         return true
     }
 
-    // =========================
-    // MIRRORS
-    // =========================
     private fun fixHostsLinks(url: String): String {
         return url
             .replace("hglink.to", "streamwish.to")

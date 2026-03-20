@@ -4,7 +4,7 @@ import android.util.Log
 import java.util.regex.Pattern
 import kotlin.math.pow
 
-// https://github.com/cylonu87/JsUnpacker
+
 class JsUnpacker(packedJS: String?) {
     private var packedJS: String? = null
 
