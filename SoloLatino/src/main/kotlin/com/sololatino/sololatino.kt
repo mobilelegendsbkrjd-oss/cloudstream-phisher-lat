@@ -136,7 +136,7 @@ class SoloLatino : MainAPI() {
     }
 
     // =========================
-    // LINKS
+    // LINKS (FIX TOTAL)
     // =========================
     override suspend fun loadLinks(
         data: String,
@@ -148,9 +148,11 @@ class SoloLatino : MainAPI() {
         val doc = app.get(data).document
         val servers = mutableListOf<String>()
 
+        // normales
         servers += doc.select("[data-server-btn]")
             .mapNotNull { it.attr("data-server-url") }
 
+        // anime onclick
         servers += doc.select("li[onclick]")
             .mapNotNull {
                 Regex("""go_to_player\('([^']+)""")
@@ -160,21 +162,7 @@ class SoloLatino : MainAPI() {
 
         if (servers.isEmpty()) return false
 
-        val preferidos = listOf(
-            "dood", "voe", "streamwish", "vidhide",
-            "filemoon", "embed69", "watchsb"
-        )
-
-        val sorted = servers.sortedWith(compareBy<String> { url ->
-            val lower = url.lowercase()
-            when {
-                lastServer != null && lower.contains(lastServer!!) -> 0
-                preferidos.any { lower.contains(it) } -> 1
-                lower.contains("mp4upload") -> 10
-                lower.contains("ok.ru") -> 15
-                else -> 5
-            }
-        })
+        val sorted = servers.distinct()
 
         sorted.forEach { originalUrl ->
 
@@ -186,62 +174,57 @@ class SoloLatino : MainAPI() {
             }
 
             // =========================
-            // RE.SOLOLATINO
+            // 🔥 TOKYO MX / BASE64 FIX
             // =========================
             if (originalUrl.contains("re.sololatino.net")) {
 
                 try {
-                    val html = app.get(originalUrl).text
+                    val decoded = Regex("""link=([^&]+)""")
+                        .find(originalUrl)
+                        ?.groupValues?.getOrNull(1)
+                        ?.let {
+                            String(Base64.decode(it, Base64.DEFAULT))
+                        }
 
-                    Regex("""https?:\/\/[^\s"']+\.mp4""")
-                        .find(html)?.value?.let {
+                    if (!decoded.isNullOrEmpty()) {
+
+                        val finalUrl = fixHostsLinks(decoded)
+
+                        loadExtractor(finalUrl, originalUrl, subtitleCallback, callback)
+
+                        if (finalUrl.endsWith(".mp4") || finalUrl.contains(".m3u8")) {
                             callback.invoke(
-                                newExtractorLink("TokyoMX", "MP4", it) {
-                                    this.type = ExtractorLinkType.VIDEO
+                                newExtractorLink(
+                                    "TokyoMX",
+                                    "Direct",
+                                    finalUrl
+                                ) {
+                                    this.type = if (finalUrl.contains("m3u8"))
+                                        ExtractorLinkType.M3U8
+                                    else ExtractorLinkType.VIDEO
+
+                                    this.referer = originalUrl
                                 }
                             )
-                            return@forEach
                         }
 
-                    Regex("""<iframe[^>]+src="([^"]+)"""")
-                        .find(html)?.groupValues?.getOrNull(1)?.let {
-                            loadExtractor(it, originalUrl, subtitleCallback, callback)
-                            return@forEach
-                        }
-
-                    val packed = Regex(
-                        """eval\(function\(p,a,c,k,e,d.*?\)\)""",
-                        RegexOption.DOT_MATCHES_ALL
-                    ).find(html)?.value
-
-                    if (packed != null) {
-                        val unpacked = JsUnpacker(packed).unpack()
-
-                        Regex("""https?:\/\/[^\s"']+\.m3u8""")
-                            .find(unpacked ?: "")?.value?.let {
-                                callback.invoke(
-                                    newExtractorLink("TokyoMX", "HLS", it) {
-                                        this.type = ExtractorLinkType.M3U8
-                                    }
-                                )
-                                return@forEach
-                            }
+                        return@forEach
                     }
 
                 } catch (_: Exception) {}
             }
 
             // =========================
-            // OK.RU + MP4UPLOAD FIX
+            // 🔥 OK.RU + MP4UPLOAD FIX
             // =========================
             else if (fixedUrl.contains("ok.ru") || fixedUrl.contains("mp4upload")) {
 
                 try {
                     var extracted = false
 
-                    loadExtractor(fixedUrl, data, subtitleCallback) { link ->
+                    loadExtractor(fixedUrl, data, subtitleCallback) {
                         extracted = true
-                        callback.invoke(link)
+                        callback.invoke(it)
                     }
 
                     if (!extracted) {
@@ -251,6 +234,7 @@ class SoloLatino : MainAPI() {
                         Regex("""https?://[^"'\s<>()]+?\.(mp4|m3u8)""")
                             .findAll(html)
                             .forEach {
+
                                 val link = it.value
 
                                 callback.invoke(
@@ -284,6 +268,9 @@ class SoloLatino : MainAPI() {
                 } catch (_: Exception) {}
             }
 
+            // =========================
+            // RESTO
+            // =========================
             else when {
 
                 fixedUrl.contains("embed69") -> {
@@ -342,4 +329,4 @@ class SoloLatino : MainAPI() {
 
             .replace("voe.sx", "voe.unblockit.cat")
     }
-                          }
+}
