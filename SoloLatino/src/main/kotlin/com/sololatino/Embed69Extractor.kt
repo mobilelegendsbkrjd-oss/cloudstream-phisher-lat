@@ -46,10 +46,26 @@ object Embed69Extractor {
         // DATA LINK
         // =========================
         val dataLink = Regex("""dataLink\s*=\s*(\[.*?\]);""")
-            .find(html)
-            ?.groupValues?.getOrNull(1)
-            ?: return
+    .find(html)
+    ?.groupValues?.getOrNull(1)
 
+if (dataLink == null) {
+
+    // 🔥 FALLBACK NUEVO (EMBED69 /f/)
+    try {
+        val doc = app.get(url, headers = HEADERS).document
+
+        val iframe = doc.selectFirst("iframe")?.attr("src")
+
+        if (!iframe.isNullOrEmpty()) {
+            loadExtractor(iframe, url, subtitleCallback, callback)
+            return
+        }
+
+    } catch (_: Exception) {}
+
+    return
+}
         val parsed = AppUtils.tryParseJson<List<ServersByLang>>(dataLink) ?: return
 
         val sortedLangs = parsed.sortedBy {
