@@ -76,6 +76,49 @@ class SoloLatino : MainAPI() {
         return newHomePageResponse(normal)
     }
 
+    override suspend fun search(query: String): List<SearchResponse> {
+
+    val results = mutableListOf<SearchResponse>()
+
+    // 🔥 cargamos varias páginas manualmente
+    for (page in 1..3) {
+
+        val url = "$mainUrl/buscar?q=$query&page=$page"
+
+        val doc = app.get(url).document
+
+        val items = doc.select(".card").mapNotNull { card ->
+
+            val a = card.selectFirst("a") ?: return@mapNotNull null
+            val link = fixUrl(a.attr("href"))
+
+            val name = card.selectFirst(".card__title")?.text()
+                ?: return@mapNotNull null
+
+            val poster = card.selectFirst("img")?.let {
+                it.attr("data-src").ifBlank {
+                    it.attr("data-lazy-src").ifBlank {
+                        it.attr("src")
+                    }
+                }.replace(Regex("-\\d+x\\d+"), "")
+            }
+
+            val type = if (link.contains("/serie/"))
+                TvType.TvSeries else TvType.Movie
+
+            newMovieSearchResponse(name, link, type) {
+                this.posterUrl = poster
+            }
+        }
+
+        if (items.isEmpty()) break
+
+        results.addAll(items)
+    }
+
+    return results.distinctBy { it.url }
+    }
+
     // =========================
     // LOAD
     // =========================
