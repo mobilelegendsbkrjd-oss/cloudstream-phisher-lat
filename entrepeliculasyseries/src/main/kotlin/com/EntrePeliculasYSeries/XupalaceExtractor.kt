@@ -1,15 +1,16 @@
 package com.EntrePeliculasYSeries
 
-import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
-import org.jsoup.Jsoup
 
 class XupalaceExtractor : ExtractorApi() {
+
     override val name = "Xupalace"
-    override val mainUrl = "https://xupalace.com"
+    override val mainUrl = "https://xupalace.org"
     override val requiresReferer = true
 
     override suspend fun getUrl(
@@ -18,76 +19,145 @@ class XupalaceExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        println("[XupalaceExtractor] Procesando URL: $url")
-        
+
+        val safeUrl = url.replace("xupalace.com", "xupalace.org")
+        val mainReferer = referer ?: mainUrl
+
         try {
-            // Obtener la página
-            val response = app.get(url, referer = referer ?: mainUrl)
-            val html = response.text
-            
-            println("[XupalaceExtractor] HTML obtenido (${html.length} chars)")
-            
-            // Buscar URLs en go_to_playerVast
-            val pattern = """go_to_playerVast\s*\(\s*['"]([^'"]+)['"]""".toRegex()
-            val matches = pattern.findAll(html)
-            
-            val serverUrls = mutableListOf<String>()
-            
-            matches.forEach { match ->
-                val foundUrl = match.groupValues[1]
-                serverUrls.add(foundUrl)
-                println("[XupalaceExtractor] Encontrado en go_to_playerVast: $foundUrl")
+            val doc = app.get(safeUrl, referer = mainReferer).document
+            val html = doc.html()
+
+            val candidates = mutableListOf<String>()
+
+            fun clean(u: String): String {
+                return u.replace("\\/", "/")
+                    .replace("&amp;", "&")
+                    .trim()
             }
-            
-            // Si no encontramos, buscar otros patrones
-            if (serverUrls.isEmpty()) {
-                // Buscar iframes
-                val iframePattern = """<iframe[^>]*src=["']([^"']+)["']""".toRegex()
-                val iframeMatches = iframePattern.findAll(html)
-                
-                iframeMatches.forEach { match ->
-                    val foundUrl = match.groupValues[1]
-                    serverUrls.add(foundUrl)
-                    println("[XupalaceExtractor] Encontrado en iframe: $foundUrl")
+
+            // =========================
+            // 1. go_to_playerVast
+            // =========================
+            Regex("""go_to_playerVast\(['"]([^'"]+)""")
+                .findAll(html)
+                .forEach {
+                    candidates.add(clean(it.groupValues[1]))
                 }
-                
-                // Buscar en onclick
-                val onclickPattern = """onclick=["'].*?go_to_player.*?\(['"]([^'"]+)['"]""".toRegex()
-                val onclickMatches = onclickPattern.findAll(html)
-                
-                onclickMatches.forEach { match ->
-                    val foundUrl = match.groupValues[1]
-                    serverUrls.add(foundUrl)
-                    println("[XupalaceExtractor] Encontrado en onclick: $foundUrl")
+
+            // =========================
+            // 2. iframes
+            // =========================
+            doc.select("iframe[src]").forEach {
+                val src = it.attr("abs:src")
+                if (src.startsWith("http")) {
+                    candidates.add(clean(src))
                 }
             }
-            
-            // Procesar cada servidor encontrado
-            if (serverUrls.isNotEmpty()) {
-                println("[XupalaceExtractor] Procesando ${serverUrls.size} servidores")
-                
-                // Eliminar duplicados
-                serverUrls.distinct().forEach { serverUrl ->
-                    try {
-                        println("[XupalaceExtractor] Intentando con: $serverUrl")
-                        // loadExtractor se encargará de encontrar el extractor adecuado
-                        loadExtractor(serverUrl, url, subtitleCallback, callback)
-                        return // Salir si funciona
-                    } catch (e: Exception) {
-                        println("[XupalaceExtractor] Error con $serverUrl: ${e.message}")
-                        // Continuar con el siguiente
+
+            // =========================
+            // 3. raw urls
+            // =========================
+            Regex("""https?://[^\s'"]+""")
+                .findAll(html)
+                .forEach {
+                    val link = it.value
+                    if (knownHosts.any { h -> link.contains(h) }) {
+                        candidates.add(clean(link))
                     }
                 }
+
+            // =========================
+            // limpiar + ordenar
+            // =========================
+            val unique = candidates
+                .distinct()
+                .filter { it.startsWith("http") }
+                .sortedBy {
+                    when {
+                        it.contains("vidhide") -> 0
+                        it.contains("filemoon") -> 1
+                        it.contains("dood") -> 2
+                        it.contains("voe") -> 3
+                        it.contains("wish") -> 4
+                        else -> 99
+                    }
+                }
+
+            var found = false
+
+            for (embed in unique) {
+
+                println("[Xupalace] -> $embed")
+
+                try {
+                    when {
+
+                        // 🔥 DOOD CUSTOM
+                        embed.contains("dood") -> {
+                            DoodExtractor().getUrl(embed, safeUrl, subtitleCallback, callback)
+                            found = true
+                        }
+
+                        // 🔥 VOE (fallback genérico)
+                        embed.contains("voe") -> {
+                            loadExtractor(embed, safeUrl, subtitleCallback) {
+                                found = true
+                                callback(it)
+                            }
+                        }
+
+                        // 🔥 STREAMWISH / WISH
+                        embed.contains("wish") -> {
+                            loadExtractor(embed, safeUrl, subtitleCallback) {
+                                found = true
+                                callback(it)
+                            }
+                        }
+
+                        // 🔥 FILEMOON
+                        embed.contains("filemoon") -> {
+                            loadExtractor(embed, safeUrl, subtitleCallback) {
+                                found = true
+                                callback(it)
+                            }
+                        }
+
+                        // 🔥 DEFAULT
+                        else -> {
+                            loadExtractor(embed, safeUrl, subtitleCallback) {
+                                found = true
+                                callback(it)
+                            }
+                        }
+                    }
+
+                } catch (e: Exception) {
+                    println("[Xupalace] error: ${e.message}")
+                }
             }
-            
-            // Si llegamos aquí, nada funcionó
-            println("[XupalaceExtractor] Ningún servidor funcionó, intentando con URL original")
-            loadExtractor(url, referer, subtitleCallback, callback)
-            
+
+            // 🔥 fallback real
+            if (!found) {
+                println("[Xupalace] fallback")
+
+                loadExtractor(safeUrl, mainReferer, subtitleCallback) {
+                    callback(it)
+                }
+            }
+
         } catch (e: Exception) {
-            println("[XupalaceExtractor] ERROR: ${e.message}")
-            // Último intento
-            loadExtractor(url, referer, subtitleCallback, callback)
+            println("[Xupalace] fatal error: ${e.message}")
         }
     }
+
+    private val knownHosts = listOf(
+        "vidhide",
+        "filemoon",
+        "dood",
+        "voe",
+        "wish",
+        "streamwish",
+        "minoplayers",
+        "minochinos"
+    )
 }
