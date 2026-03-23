@@ -17,7 +17,7 @@ class SoloLatino : MainAPI() {
     )
 
     // =========================
-    // MAIN PAGE
+    // MAIN PAGE (FILTRADO)
     // =========================
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
 
@@ -80,17 +80,32 @@ class SoloLatino : MainAPI() {
     // SEARCH
     // =========================
     override suspend fun search(query: String): List<SearchResponse> {
+
         val results = mutableListOf<SearchResponse>()
 
         for (page in 1..3) {
-            val doc = app.get("$mainUrl/buscar?q=$query&page=$page").document
 
-            val items = doc.select(".card").mapNotNull {
-                val link = fixUrl(it.selectFirst("a")?.attr("href") ?: return@mapNotNull null)
-                val name = it.selectFirst(".card__title")?.text() ?: return@mapNotNull null
-                val poster = it.selectFirst("img")?.attr("src")
+            val url = "$mainUrl/buscar?q=$query&page=$page"
+            val doc = app.get(url).document
 
-                val type = if (link.contains("/serie/")) TvType.TvSeries else TvType.Movie
+            val items = doc.select(".card").mapNotNull { card ->
+
+                val a = card.selectFirst("a") ?: return@mapNotNull null
+                val link = fixUrl(a.attr("href"))
+
+                val name = card.selectFirst(".card__title")?.text()
+                    ?: return@mapNotNull null
+
+                val poster = card.selectFirst("img")?.let {
+                    it.attr("data-src").ifBlank {
+                        it.attr("data-lazy-src").ifBlank {
+                            it.attr("src")
+                        }
+                    }.replace(Regex("-\\d+x\\d+"), "")
+                }
+
+                val type = if (link.contains("/serie/"))
+                    TvType.TvSeries else TvType.Movie
 
                 newMovieSearchResponse(name, link, type) {
                     this.posterUrl = poster
@@ -98,6 +113,7 @@ class SoloLatino : MainAPI() {
             }
 
             if (items.isEmpty()) break
+
             results.addAll(items)
         }
 
@@ -105,7 +121,7 @@ class SoloLatino : MainAPI() {
     }
 
     // =========================
-    // LOAD
+    // LOAD (TEMPORADAS FIX)
     // =========================
     override suspend fun load(url: String): LoadResponse {
 
@@ -144,7 +160,8 @@ class SoloLatino : MainAPI() {
 
                 val epTitle = ep.selectFirst("p.text-sm")?.text()?.trim()
 
-                val extra = ep.select("p.text-xs").map { it.text().trim() }
+                val extra = ep.select("p.text-xs")
+                    .map { it.text().trim() }
 
                 val description = extra.firstOrNull {
                     !it.matches(Regex("""\d{2}/\d{2}/\d{4}"""))
@@ -173,7 +190,7 @@ class SoloLatino : MainAPI() {
     }
 
     // =========================
-    // 🔥 LINKS (XUPALACE FIX REAL)
+    // LINKS (ESTABLE FINAL)
     // =========================
     override suspend fun loadLinks(
         data: String,
@@ -193,7 +210,7 @@ class SoloLatino : MainAPI() {
 
             val fixedServer = fixHostsLinks(server)
 
-            // 🔥 USAR EXTRACTOR REAL
+            // 👉 SI USAS XUPALACE EXTRACTOR EXTERNO
             if (fixedServer.contains("xupalace")) {
                 XupalaceExtractor().getUrl(
                     fixedServer,
@@ -204,7 +221,6 @@ class SoloLatino : MainAPI() {
                 continue
             }
 
-            // 🔥 TU FLUJO ORIGINAL
             val links = getServersFromIframe(server, data)
 
             links.forEach {
