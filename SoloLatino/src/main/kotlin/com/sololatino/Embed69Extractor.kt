@@ -1,22 +1,10 @@
 package com.sololatino
 
-import com.fasterxml.jackson.annotation.JsonProperty
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.app
+import android.util.Base64
+import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.RequestBody.Companion.toRequestBody
 
 object Embed69Extractor {
-
-    private const val DECRYPT_URL = "https://embed69.org/api/decrypt"
-
-    private val HEADERS = mapOf(
-        "User-Agent" to "Mozilla/5.0",
-        "Referer" to "https://embed69.org/",
-        "Origin" to "https://embed69.org",
-        "Accept" to "*/*"
-    )
 
     suspend fun load(
         url: String,
@@ -25,233 +13,52 @@ object Embed69Extractor {
         callback: (ExtractorLink) -> Unit
     ) {
 
-        val res = app.get(url, headers = HEADERS)
-        val html = res.text
+        val html = app.get(url, headers = mapOf("Referer" to referer)).text
 
         // =========================
-        // SUBTÍTULOS
+        // dataLink
         // =========================
-        Regex("""<track[^>]*src="([^"]*\.vtt)"[^>]*label="([^"]*)"""")
-            .findAll(html)
-            .forEach {
-                subtitleCallback(
-                    SubtitleFile(
-                        it.groupValues[1],
-                        it.groupValues[2]
-                    )
-                )
-            }
+        Regex("""dataLink\s*=\s*(\[.*?\]);""")
+            .find(html)?.groupValues?.getOrNull(1)?.let { json ->
 
-        // =========================
-        // DATA LINK
-        // =========================
-        val dataLink = Regex("""dataLink\s*=\s*(\[.*?\]);""")
-    .find(html)
-    ?.groupValues?.getOrNull(1)
+                val parsed = AppUtils.tryParseJson<List<Map<String, Any>>>(json) ?: return
 
-if (dataLink == null) {
+                parsed.forEach { lang ->
+                    val embeds = lang["sortedEmbeds"] as? List<Map<String, Any>> ?: return@forEach
 
-    // 🔥 FALLBACK NUEVO (EMBED69 /f/)
-    try {
-        val doc = app.get(url, headers = HEADERS).document
+                    embeds.forEach { embed ->
+                        val enc = embed["link"] as? String ?: return@forEach
+                        val real = decode(enc) ?: return@forEach
 
-        val iframe = doc.selectFirst("iframe")?.attr("src")
-
-        if (!iframe.isNullOrEmpty()) {
-            loadExtractor(iframe, url, subtitleCallback, callback)
-            return
-        }
-
-    } catch (_: Exception) {}
-
-    return
-}
-        val parsed = AppUtils.tryParseJson<List<ServersByLang>>(dataLink) ?: return
-
-        val sortedLangs = parsed.sortedBy {
-            val name = it.videoLanguage?.uppercase() ?: ""
-            when {
-                name.contains("LAT") -> 1
-                name.contains("SUB") -> 2
-                name.contains("ESP") -> 3
-                else -> 4
-            }
-        }
-
-        sortedLangs.forEach { lang ->
-
-            val linksJson = lang.sortedEmbeds
-                .mapNotNull { it.link }
-                .joinToString(prefix = "[", postfix = "]") { "\"$it\"" }
-
-            val json = """{"links":$linksJson}"""
-
-            val body = json.toRequestBody("application/json".toMediaTypeOrNull())
-
-            val decrypted = app.post(
-                DECRYPT_URL,
-                requestBody = body,
-                headers = HEADERS
-            ).parsedSafe<Loadlinks>() ?: return@forEach
-
-            if (!decrypted.success) return@forEach
-
-            val sortedLinks = decrypted.links.sortedBy {
-                val u = it.link.lowercase()
-                when {
-                    u.contains("voe") && u.contains("mp4") -> 1
-                    u.contains("voe") -> 2
-                    u.contains("filemoon") -> 3
-                    u.contains("streamwish") -> 4
-                    u.contains("minochinos") -> 5
-                    else -> 6
-                }
-            }
-
-            sortedLinks.forEach { linkItem ->
-
-                val fixed = fixHostsLinks(linkItem.link)
-
-                when {
-
-                    // 🔥 MINOCHINOS
-                    fixed.contains("minochinos") -> {
-                        extractMinochinos(fixed, referer, callback)
-                    }
-
-                    // 🔥 VIDHIDE / CLONES
-                    fixed.contains("vidhide") ||
-                    fixed.contains("mivalyo") ||
-                    fixed.contains("dhtpre") -> {
-                        extractVidHide(fixed, referer, callback)
-                    }
-
-                    // 🔥 DEFAULT
-                    else -> {
-                        loadExtractor(fixed, referer, subtitleCallback, callback)
+                        loadExtractor(real, url, subtitleCallback, callback)
                     }
                 }
             }
+
+        // =========================
+        // fallback iframe
+        // =========================
+        app.get(url).document.selectFirst("iframe")?.attr("src")?.let {
+            loadExtractor(it, url, subtitleCallback, callback)
         }
     }
 
-    // =========================
-    // MINOCHINOS
-    // =========================
-    private suspend fun extractMinochinos(
-        url: String,
-        referer: String,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        try {
-            val res = app.get(
-                url,
-                headers = mapOf(
-                    "User-Agent" to "Mozilla/5.0",
-                    "Referer" to referer,
-                    "Origin" to "https://minochinos.com"
-                )
-            )
+    private fun decode(enc: String): String? {
+        return try {
+            val parts = enc.split(".")
+            if (parts.size != 3) return null
 
-            val html = res.text
+            var payload = parts[1]
+            val pad = payload.length % 4
+            if (pad != 0) payload += "=".repeat(4 - pad)
 
-            Regex("""https?:\/\/[^\s"']+master\.m3u8""")
-                .find(html)
-                ?.value?.let { master ->
+            val json = String(Base64.decode(payload, Base64.DEFAULT))
 
-                    callback.invoke(
-                        newExtractorLink(
-                            "Minochinos",
-                            "Minochinos",
-                            master
-                        ) {
-                            this.type = ExtractorLinkType.M3U8
-                            this.referer = "https://minochinos.com/"
-                            this.quality = 720
-                        }
-                    )
-                }
+            Regex("\"link\":\"(.*?)\"")
+                .find(json)?.groupValues?.getOrNull(1)
 
-        } catch (_: Exception) {}
-    }
-
-    // =========================
-    // VIDHIDE
-    // =========================
-    private suspend fun extractVidHide(
-        url: String,
-        referer: String,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        try {
-            val res = app.get(
-                url,
-                headers = mapOf(
-                    "User-Agent" to "Mozilla/5.0",
-                    "Referer" to referer
-                )
-            )
-
-            val html = res.text
-
-            val packed = Regex(
-                """eval\(function\(p,a,c,k,e,d.*?\)\)""",
-                RegexOption.DOT_MATCHES_ALL
-            ).find(html)?.value ?: return
-
-            val unpacked = JsUnpacker(packed).unpack() ?: return
-
-            Regex("""https?:\/\/[^\s"']+\.m3u8""")
-                .find(unpacked)?.value?.let { m3u8 ->
-
-                    callback.invoke(
-                        newExtractorLink(
-                            "VidHide",
-                            "VidHide HLS",
-                            m3u8
-                        ) {
-                            this.type = ExtractorLinkType.M3U8
-                            this.referer = url
-                            this.quality = 720
-                        }
-                    )
-                }
-
-        } catch (_: Exception) {}
-    }
-
-    // =========================
-    // MIRRORS FIX
-    // =========================
-    private fun fixHostsLinks(url: String): String {
-        return url
-            .replace("hglink.to", "streamwish.to")
-            .replace("filemoon.link", "filemoon.sx")
-            .replace("do7go.com", "dood.la")
+        } catch (e: Exception) {
+            null
+        }
     }
 }
-
-// =========================
-// DATA CLASSES
-// =========================
-
-data class Server(
-    @JsonProperty("servername") val servername: String? = null,
-    @JsonProperty("link") val link: String? = null,
-)
-
-data class ServersByLang(
-    @JsonProperty("file_id") val fileId: String? = null,
-    @JsonProperty("video_language") val videoLanguage: String? = null,
-    @JsonProperty("sortedEmbeds") val sortedEmbeds: List<Server> = emptyList(),
-)
-
-data class Loadlinks(
-    val success: Boolean,
-    val links: List<Link>,
-)
-
-data class Link(
-    val index: Long,
-    val link: String,
-)
