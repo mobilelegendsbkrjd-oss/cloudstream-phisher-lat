@@ -325,5 +325,9 @@ class SoloLatino : MainAPI() {
             .replace("uqload.io", "uqload.com")
 
             .replace("voe.sx", "voe.unblockit.cat")
+            .replace("filelions", "filelions.site")
+            .replace("streamtape.com", "streamtape.to")
+            .replace("mixdrop.co", "mixdrop.ps")
+            .replace("kwik.cx", "kwik.si")
     }
 }
