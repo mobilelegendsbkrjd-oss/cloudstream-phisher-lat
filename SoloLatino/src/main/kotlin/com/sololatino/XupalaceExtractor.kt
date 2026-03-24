@@ -88,42 +88,17 @@ class XupalaceExtractor : ExtractorApi() {
 
             for (embed in unique) {
 
+                if (found) break  // 🔥 corta cuando ya jaló uno
+
                 println("[Xupalace] -> $embed")
 
                 try {
                     when {
-
-                        // 🔥 DOOD CUSTOM
                         embed.contains("dood") -> {
                             DoodExtractor().getUrl(embed, safeUrl, subtitleCallback, callback)
                             found = true
                         }
 
-                        // 🔥 VOE (fallback genérico)
-                        embed.contains("voe") -> {
-                            loadExtractor(embed, safeUrl, subtitleCallback) {
-                                found = true
-                                callback(it)
-                            }
-                        }
-
-                        // 🔥 STREAMWISH / WISH
-                        embed.contains("wish") -> {
-                            loadExtractor(embed, safeUrl, subtitleCallback) {
-                                found = true
-                                callback(it)
-                            }
-                        }
-
-                        // 🔥 FILEMOON
-                        embed.contains("filemoon") -> {
-                            loadExtractor(embed, safeUrl, subtitleCallback) {
-                                found = true
-                                callback(it)
-                            }
-                        }
-
-                        // 🔥 DEFAULT
                         else -> {
                             loadExtractor(embed, safeUrl, subtitleCallback) {
                                 found = true
@@ -132,9 +107,7 @@ class XupalaceExtractor : ExtractorApi() {
                         }
                     }
 
-                } catch (e: Exception) {
-                    println("[Xupalace] error: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
 
             // 🔥 fallback real
