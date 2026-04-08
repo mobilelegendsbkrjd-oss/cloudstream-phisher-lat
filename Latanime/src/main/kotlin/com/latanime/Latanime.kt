@@ -84,12 +84,24 @@ class Latanime : MainAPI() {
         val epsAnchor   = document.select("div.row a[href*='/ver/']")
 
         return if (epsAnchor.size > 1) {
-            val episodes: List<Episode>? = epsAnchor.map {
+            val episodes: List<Episode>? = epsAnchor.mapIndexed { index, it ->
+
                 val epPoster = it.select("img").attr("data-src")
                 val epHref   = it.attr("href")
 
                 newEpisode(epHref) {
+
                     this.posterUrl = epPoster
+
+                    // 🔥 ESTO ES LA CLAVE REAL
+                    this.name = "Episodio ${index + 1}"
+                    this.episode = index + 1
+
+                    // 🔥 FORZAR QUE SEA TRATADO COMO SERIE
+                    this.season = 1
+
+                    // 🔥 IMPORTANTE: descripción (activa UI avanzada)
+                    this.description = "Episodio ${index + 1}"
                 }
             }
 
