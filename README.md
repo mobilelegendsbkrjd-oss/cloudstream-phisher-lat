@@ -67,8 +67,18 @@ If you find this project helpful, consider supporting its development!
 
 <a href="https://buymeacoffee.com/bkrjd" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
 
+<<<<<<< HEAD
 [![Support me on Ko-fi](https://img.shields.io/badge/Ko--fi-Support%20Me-red?logo=ko-fi)](https://ko-fi.com/bkrjd)
 
+=======
+## 🌐 Plugin Servers
+
+### 🔹 Phisher Cloudstream Plugin Server
+[![Discord](https://invidget.switchblade.xyz/3VmSzGeCTz)](https://discord.com/invite/3VmSzGeCTz)
+
+### 🔸 Cloudstream Plugin Server
+[![Discord](https://invidget.switchblade.xyz/JrGk2MjX7S)](https://discord.com/invite/JrGk2MjX7S)
+>>>>>>> upstream/master
 
 ---
 

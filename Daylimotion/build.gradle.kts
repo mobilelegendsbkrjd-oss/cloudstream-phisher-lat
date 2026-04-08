@@ -22,7 +22,12 @@ cloudstream {
     // You can find a list of available types here:
     // https://recloudstream.github.io/cloudstream/html/app/com.lagradost.cloudstream3/-tv-type/index.html
     tvTypes = listOf("Movie","Anime","AnimeMovie")
+<<<<<<< HEAD:Daylimotion/build.gradle.kts
     iconUrl = "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/Icons/animeav1.png"
+=======
+    iconUrl= "https://www.google.com/s2/favicons?domain=animeyy.com&sz=%size%"
+
+>>>>>>> upstream/master:Animez/build.gradle.kts
 
     isCrossPlatform = false
 }

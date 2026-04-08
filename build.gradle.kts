@@ -17,6 +17,21 @@ buildscript {
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.3.0")
     }
 }
+//json change may need to change in future to remove this
+
+/*
+w: file:///home/runner/work/cloudstream-extensions-phisher/cloudstream-extensions-phisher/src/StremioX/src/main/kotlin/com/phisher98/StremioX.kt:478:9 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+ */
+
+subprojects {
+    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+        compilerOptions {
+            freeCompilerArgs.add("-Xannotation-default-target=param-property")
+        }
+    }
+}
 
 allprojects {
     repositories {

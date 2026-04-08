@@ -1,5 +1,9 @@
 // use an integer for version numbers
+<<<<<<< HEAD:entrepeliculasyseries/build.gradle.kts
 version = 5
+=======
+version = 31
+>>>>>>> upstream/master:FourKHDHub/build.gradle.kts
 
 
 cloudstream {

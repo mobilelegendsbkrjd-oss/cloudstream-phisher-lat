@@ -20,8 +20,13 @@ cloudstream {
     // List of video source types. Users are able to filter for extensions in a given category.
     // You can find a list of available types here:
     // https://recloudstream.github.io/cloudstream/html/app/com.lagradost.cloudstream3/-tv-type/index.html
+<<<<<<< HEAD:series24/build.gradle.kts
     tvTypes = listOf("Movie","Anime","AnimeMovie")
     iconUrl = "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/Icons/animeav1.png"
+=======
+    tvTypes = listOf("AnimeMovie","Anime","Cartoon")
+    iconUrl="https://rzflix.com/logo.png"
+>>>>>>> upstream/master:RingZ/build.gradle.kts
 
     isCrossPlatform = false
 }

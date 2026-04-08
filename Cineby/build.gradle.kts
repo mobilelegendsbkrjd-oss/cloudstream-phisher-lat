@@ -1,5 +1,9 @@
 // use an integer for version numbers
+<<<<<<< HEAD:Cineby/build.gradle.kts
 version = 1
+=======
+version = 3
+>>>>>>> upstream/master:BanglaPlex/build.gradle.kts
 
 
 cloudstream {
@@ -24,5 +28,11 @@ cloudstream {
     tvTypes = listOf("Movie","TvSeries")
     iconUrl = "https://m.media-amazon.com/images/I/31kpNSQr6vL.jpg"
 
+<<<<<<< HEAD:Cineby/build.gradle.kts
     isCrossPlatform = false
+=======
+    iconUrl="https://www.google.com/s2/favicons?domain=banglaplex.click&sz=%size%"
+
+    isCrossPlatform = true
+>>>>>>> upstream/master:BanglaPlex/build.gradle.kts
 }

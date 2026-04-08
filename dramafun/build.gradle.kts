@@ -21,8 +21,15 @@ cloudstream {
     // List of video source types. Users are able to filter for extensions in a given category.
     // You can find a list of available types here:
     // https://recloudstream.github.io/cloudstream/html/app/com.lagradost.cloudstream3/-tv-type/index.html
+<<<<<<< HEAD:dramafun/build.gradle.kts
     tvTypes = listOf("TvSeries")
     iconUrl = "https://raw.githubusercontent.com/mobilelegendsbkrjd-oss/lat_cs_bkrjd/main/builds/tlnovelas.jpg"
+=======
+    tvTypes = listOf("AnimeMovie","Anime","Cartoon")
+    iconUrl="https://dorabash.in/wp-content/uploads/2025/11/20210525_121800-6.png"
+    iconUrl= "https://www.google.com/s2/favicons?domain=dorabash.in&sz=%size%"
+
+>>>>>>> upstream/master:DoraBash/build.gradle.kts
 
     isCrossPlatform = false
 }
